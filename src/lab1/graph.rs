@@ -5,6 +5,7 @@ use std::collections::{HashSet, VecDeque};
 use std::sync::Mutex;
 
 use super::char_set::{has_contain_char, is_subset, segments_of};
+use super::category::LexemeCategory;
 use super::edge::Edge;
 use super::state::State;
 use super::token::Token;
@@ -104,7 +105,7 @@ impl Graph {
         let mut dfa_state_sets: Vec<HashSet<i32>> = Vec::new();
         let mut queue: VecDeque<HashSet<i32>> = VecDeque::new();
 
-        // 先将 NFA 起点做 epsilon 闭包
+        // 先将 NFA 起点做 epsilon 闭包，得到 DFA 初态对应的 NFA 状态集合。
         let mut start_set = HashSet::new();
         start_set.insert(0);
         start_set = self.epsilon_closure(&start_set);
@@ -120,7 +121,9 @@ impl Graph {
             let mut just_char_set = HashSet::new();
             let mut diff_char_set = HashSet::new();
 
-            // 收集所有可用驱动，区分单字符和字符集
+            // 收集当前集合可用的驱动边，区分 CHAR 与 CHARSET。
+            // 这样做是为了分别调用 DTran_char 与 DTran_driver，
+            // 避免把“单字符边”和“字符集边”的匹配逻辑混在一起。
             for edge in &self.pEdgeTable {
                 if curr_set.contains(&edge.fromState) && edge.driverId != -1 {
                     if edge.DriverType == "CHARSET" {
@@ -131,7 +134,8 @@ impl Graph {
                 }
             }
 
-            // 单字符驱动转移
+            // 单字符驱动转移：
+            // CHAR 的 driver_id 在本实现中仍落在字符集表中，因此取首段字符进行触发。
             for driver_id in just_char_set {
                 let mut c = '?';
                 for segment in segments_of(driver_id) {
@@ -150,7 +154,7 @@ impl Graph {
                 );
             }
 
-            // 字符集驱动转移
+            // 字符集驱动转移：直接使用 driver_id 做集合级 move。
             for driver_id in diff_char_set {
                 let next_set = self.DTran_driver(&curr_set, driver_id);
                 handle_state_transition(
@@ -165,7 +169,10 @@ impl Graph {
             }
         }
 
-        // 根据状态集合生成 DFA 状态信息
+        // 根据状态集合生成 DFA 状态信息：
+        // - 只要集合内存在 MATCH 态，DFA 态初步判定为 MATCH；
+        // - 类别冲突时优先选择“非 ID 类别”（例如 KEYWORD 优先于 ID）；
+        // - 若最终没有可用类别，则降级为 UNMATCH，避免产生无类别接受态。
         for (idx, state_set) in dfa_state_sets.iter().enumerate() {
             let contains_match = state_set.iter().any(|state_id| {
                 self.pStateTable
@@ -179,21 +186,21 @@ impl Graph {
             } else {
                 "UNMATCH".to_string()
             };
-            let mut category = String::new();
+            let mut category: Option<LexemeCategory> = None;
 
             for state in state_set {
                 let st = &self.pStateTable[*state as usize];
-                if !st.LexemeCategory.is_empty() {
-                    if st.LexemeCategory != "ID" {
-                        category = st.LexemeCategory.clone();
+                if let Some(state_category) = &st.LexemeCategory {
+                    if *state_category != LexemeCategory::ID {
+                        category = Some(state_category.clone());
                         break;
-                    } else if category.is_empty() {
-                        category = "ID".to_string();
+                    } else if category.is_none() {
+                        category = Some(LexemeCategory::ID);
                     }
                 }
             }
 
-            if category.is_empty() && match_type == "MATCH" {
+            if category.is_none() && match_type == "MATCH" {
                 match_type = "UNMATCH".to_string();
             }
 
@@ -220,7 +227,7 @@ impl Graph {
 
         for c in text.chars() {
             let mut has_next = false;
-            // 检查是否存在可走的边
+            // 检查当前状态是否存在可消费字符 c 的边。
             for edge in &self.pEdgeTable {
                 if edge.fromState == next_state
                     && edge.driverId != -1
@@ -239,7 +246,7 @@ impl Graph {
                 buffer.clear();
                 buffer.push(c);
                 next_state = 0;
-                // 从初态重新尝试匹配
+                // 从初态重新尝试匹配当前字符，支持“最长前缀截断后继续扫描”的行为。
                 for edge in &self.pEdgeTable {
                     if edge.fromState == next_state
                         && edge.driverId != -1
@@ -262,7 +269,7 @@ impl Graph {
     }
 
     /// 获取某个词素的类别
-    pub fn get_lexeme_category(&self, text: &str) -> Option<String> {
+    pub fn get_lexeme_category(&self, text: &str) -> Option<LexemeCategory> {
         let mut curr_state = 0;
         for c in text.chars() {
             let mut jumped = false;
@@ -280,12 +287,7 @@ impl Graph {
                 return None;
             }
         }
-        let category = self.pStateTable[curr_state as usize].LexemeCategory.clone();
-        if category.is_empty() {
-            None
-        } else {
-            Some(category)
-        }
+        self.pStateTable[curr_state as usize].LexemeCategory.clone()
     }
 
     /// 根据当前状态生成 token
@@ -294,25 +296,27 @@ impl Graph {
             return None;
         }
         let state = &self.pStateTable[state_idx as usize];
-        if state.LexemeCategory.is_empty()
-            || state.LexemeCategory == "BLANK"
-            || state.LexemeCategory == "NOTE"
-        {
+        let category = state.LexemeCategory.clone()?;
+        // NOTE / SPACE_CONST 默认不对外输出 token。
+        if category == LexemeCategory::SPACE_CONST || category == LexemeCategory::NOTE {
             return None;
         }
 
         let mut token = Token {
-            lexeme_category: state.LexemeCategory.clone(),
+            lexeme_category: category.clone(),
             symbol_type: "TERMINAL".to_string(),
             identify: None,
             value: None,
         };
 
-        if state.LexemeCategory == "identifier" {
+        // 依据类别填充 token 的附加字段：
+        // - ID / KEYWORD 记录原词素到 identify；
+        // - INTEGER_CONST 尝试解析数值写入 value。
+        if category == LexemeCategory::ID {
             token.identify = Some(buffer.to_string());
-        } else if state.LexemeCategory == "Number" {
+        } else if category == LexemeCategory::INTEGER_CONST {
             token.value = buffer.parse::<i64>().ok();
-        } else if state.LexemeCategory == "KEYWORD" {
+        } else if category == LexemeCategory::KEYWORD {
             token.identify = Some(buffer.to_string());
         }
 
@@ -334,6 +338,8 @@ fn handle_state_transition(
         return;
     }
 
+    // 若 next_state_set 已存在，则只新增一条边指向已有 DFA 节点；
+    // 否则创建新 DFA 节点（通过 push 到 dfa_state_sets 并入队）。
     if let Some(pos) = dfa_state_sets.iter().position(|set| *set == next_state_set) {
         edge_list.push(Edge {
             fromState: curr_state_id,
@@ -366,17 +372,24 @@ fn shift_graph(graph: &mut Graph, offset: i32) {
 }
 
 /// 创建一个只有起止两状态的基础 NFA
-pub fn generateBasicNFA(driverType: &str, driverId: i32, category: &str) -> Graph {
+pub fn generateBasicNFA(
+    driverType: &str,
+    driverId: i32,
+    category: Option<LexemeCategory>,
+) -> Graph {
+    // 结构固定：
+    //   state 0(UNMATCH) --driver--> state 1(MATCH, category)
+    // 所有复杂正则都由该最小单元经 union/product/closure 组合而成。
     let mut graph = Graph::new(2);
     graph.pStateTable.push(State {
         stateId: 0,
         StateType: "UNMATCH".to_string(),
-        LexemeCategory: String::new(),
+        LexemeCategory: None,
     });
     graph.pStateTable.push(State {
         stateId: 1,
         StateType: "MATCH".to_string(),
-        LexemeCategory: category.to_string(),
+        LexemeCategory: category,
     });
     graph.pEdgeTable.push(Edge {
         fromState: 0,
@@ -398,7 +411,7 @@ pub fn union(mut g1: Graph, mut g2: Graph) -> Graph {
     states.push(State {
         stateId: 0,
         StateType: "UNMATCH".to_string(),
-        LexemeCategory: String::new(),
+        LexemeCategory: None,
     });
     states.extend(g1.pStateTable.clone());
     states.extend(g2.pStateTable.clone());
@@ -406,7 +419,7 @@ pub fn union(mut g1: Graph, mut g2: Graph) -> Graph {
     states.push(State {
         stateId: accept_id,
         StateType: "MATCH".to_string(),
-        LexemeCategory: String::new(),
+        LexemeCategory: None,
     });
 
     let mut edges = Vec::new();
@@ -468,7 +481,7 @@ pub fn product(mut g1: Graph, mut g2: Graph) -> Graph {
     for state in states.iter_mut() {
         if state.stateId < g2_start_id && state.StateType == "MATCH" {
             state.StateType = "UNMATCH".to_string();
-            state.LexemeCategory.clear();
+            state.LexemeCategory = None;
             edges.push(Edge {
                 fromState: state.stateId,
                 nextState: g2_start_id,
@@ -515,14 +528,14 @@ pub fn closure(mut g: Graph) -> Graph {
     states.push(State {
         stateId: 0,
         StateType: "UNMATCH".to_string(),
-        LexemeCategory: String::new(),
+        LexemeCategory: None,
     });
     states.extend(g.pStateTable.clone());
     let accept_id = states.len() as i32;
     states.push(State {
         stateId: accept_id,
         StateType: "MATCH".to_string(),
-        LexemeCategory: String::new(),
+        LexemeCategory: None,
     });
 
     let mut edges = g.pEdgeTable.clone();
@@ -579,14 +592,14 @@ pub fn zeroOrOne(mut g: Graph) -> Graph {
     states.push(State {
         stateId: 0,
         StateType: "UNMATCH".to_string(),
-        LexemeCategory: String::new(),
+        LexemeCategory: None,
     });
     states.extend(g.pStateTable.clone());
     let accept_id = states.len() as i32;
     states.push(State {
         stateId: accept_id,
         StateType: "MATCH".to_string(),
-        LexemeCategory: String::new(),
+        LexemeCategory: None,
     });
 
     let mut edges = g.pEdgeTable.clone();
