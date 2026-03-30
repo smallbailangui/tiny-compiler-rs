@@ -1,4 +1,5 @@
 #![allow(non_snake_case)]
+#![allow(dead_code)]
 
 use once_cell::sync::Lazy;
 use std::char;
@@ -225,7 +226,7 @@ pub fn difference_charsets(char_set_id1: i32, char_set_id2: i32) -> i32 {
 
     for seg1 in list1 {
         let mut start1 = seg1.fromChar as u32;
-        let mut end1 = seg1.toChar as u32;
+        let end1 = seg1.toChar as u32;
         // 跳过完全在 seg1 左侧的 seg2
         while idx2 < list2.len() && (list2[idx2].toChar as u32) < start1 {
             idx2 += 1;

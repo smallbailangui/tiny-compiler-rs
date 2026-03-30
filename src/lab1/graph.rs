@@ -1,4 +1,5 @@
 #![allow(non_snake_case)]
+#![allow(dead_code)]
 
 use once_cell::sync::Lazy;
 use std::collections::{HashSet, VecDeque};
@@ -467,7 +468,7 @@ pub fn union(mut g1: Graph, mut g2: Graph) -> Graph {
 }
 
 /// 图的串联：将 g1 的终态指向 g2 的始态
-pub fn product(mut g1: Graph, mut g2: Graph) -> Graph {
+pub fn product(g1: Graph, mut g2: Graph) -> Graph {
     let g1_count = g1.pStateTable.len() as i32;
     shift_graph(&mut g2, g1_count);
     let g2_start_id = g1_count;

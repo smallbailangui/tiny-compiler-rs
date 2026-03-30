@@ -1,4 +1,7 @@
 #![allow(non_snake_case)]
+#![allow(dead_code)]
+
+use super::category::LexemeCategory;
 
 use super::category::LexemeCategory;
 
