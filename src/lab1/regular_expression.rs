@@ -16,6 +16,7 @@ pub struct RegularExpression {
     pub type1: String,
     pub type2: String,
     pub resultType: String,
+    /// 该正则最终产出的词法类别（若有）
     pub LexemeCategory: Option<LexemeCategory>,
     pub pNFA: Graph,
 }
