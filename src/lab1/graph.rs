@@ -5,6 +5,7 @@ use std::collections::{HashSet, VecDeque};
 use std::sync::Mutex;
 
 use super::char_set::{has_contain_char, is_subset, segments_of};
+use super::category::LexemeCategory;
 use super::edge::Edge;
 use super::state::State;
 use super::token::Token;
@@ -179,21 +180,21 @@ impl Graph {
             } else {
                 "UNMATCH".to_string()
             };
-            let mut category = String::new();
+            let mut category: Option<LexemeCategory> = None;
 
             for state in state_set {
                 let st = &self.pStateTable[*state as usize];
-                if !st.LexemeCategory.is_empty() {
-                    if st.LexemeCategory != "ID" {
-                        category = st.LexemeCategory.clone();
+                if let Some(state_category) = &st.LexemeCategory {
+                    if *state_category != LexemeCategory::ID {
+                        category = Some(state_category.clone());
                         break;
-                    } else if category.is_empty() {
-                        category = "ID".to_string();
+                    } else if category.is_none() {
+                        category = Some(LexemeCategory::ID);
                     }
                 }
             }
 
-            if category.is_empty() && match_type == "MATCH" {
+            if category.is_none() && match_type == "MATCH" {
                 match_type = "UNMATCH".to_string();
             }
 
@@ -262,7 +263,7 @@ impl Graph {
     }
 
     /// 获取某个词素的类别
-    pub fn get_lexeme_category(&self, text: &str) -> Option<String> {
+    pub fn get_lexeme_category(&self, text: &str) -> Option<LexemeCategory> {
         let mut curr_state = 0;
         for c in text.chars() {
             let mut jumped = false;
@@ -280,12 +281,7 @@ impl Graph {
                 return None;
             }
         }
-        let category = self.pStateTable[curr_state as usize].LexemeCategory.clone();
-        if category.is_empty() {
-            None
-        } else {
-            Some(category)
-        }
+        self.pStateTable[curr_state as usize].LexemeCategory.clone()
     }
 
     /// 根据当前状态生成 token
@@ -294,25 +290,23 @@ impl Graph {
             return None;
         }
         let state = &self.pStateTable[state_idx as usize];
-        if state.LexemeCategory.is_empty()
-            || state.LexemeCategory == "BLANK"
-            || state.LexemeCategory == "NOTE"
-        {
+        let category = state.LexemeCategory.clone()?;
+        if category == LexemeCategory::SPACE_CONST || category == LexemeCategory::NOTE {
             return None;
         }
 
         let mut token = Token {
-            lexeme_category: state.LexemeCategory.clone(),
+            lexeme_category: category.clone(),
             symbol_type: "TERMINAL".to_string(),
             identify: None,
             value: None,
         };
 
-        if state.LexemeCategory == "identifier" {
+        if category == LexemeCategory::ID {
             token.identify = Some(buffer.to_string());
-        } else if state.LexemeCategory == "Number" {
+        } else if category == LexemeCategory::INTEGER_CONST {
             token.value = buffer.parse::<i64>().ok();
-        } else if state.LexemeCategory == "KEYWORD" {
+        } else if category == LexemeCategory::KEYWORD {
             token.identify = Some(buffer.to_string());
         }
 
@@ -366,17 +360,21 @@ fn shift_graph(graph: &mut Graph, offset: i32) {
 }
 
 /// 创建一个只有起止两状态的基础 NFA
-pub fn generateBasicNFA(driverType: &str, driverId: i32, category: &str) -> Graph {
+pub fn generateBasicNFA(
+    driverType: &str,
+    driverId: i32,
+    category: Option<LexemeCategory>,
+) -> Graph {
     let mut graph = Graph::new(2);
     graph.pStateTable.push(State {
         stateId: 0,
         StateType: "UNMATCH".to_string(),
-        LexemeCategory: String::new(),
+        LexemeCategory: None,
     });
     graph.pStateTable.push(State {
         stateId: 1,
         StateType: "MATCH".to_string(),
-        LexemeCategory: category.to_string(),
+        LexemeCategory: category,
     });
     graph.pEdgeTable.push(Edge {
         fromState: 0,
@@ -398,7 +396,7 @@ pub fn union(mut g1: Graph, mut g2: Graph) -> Graph {
     states.push(State {
         stateId: 0,
         StateType: "UNMATCH".to_string(),
-        LexemeCategory: String::new(),
+        LexemeCategory: None,
     });
     states.extend(g1.pStateTable.clone());
     states.extend(g2.pStateTable.clone());
@@ -406,7 +404,7 @@ pub fn union(mut g1: Graph, mut g2: Graph) -> Graph {
     states.push(State {
         stateId: accept_id,
         StateType: "MATCH".to_string(),
-        LexemeCategory: String::new(),
+        LexemeCategory: None,
     });
 
     let mut edges = Vec::new();
@@ -468,7 +466,7 @@ pub fn product(mut g1: Graph, mut g2: Graph) -> Graph {
     for state in states.iter_mut() {
         if state.stateId < g2_start_id && state.StateType == "MATCH" {
             state.StateType = "UNMATCH".to_string();
-            state.LexemeCategory.clear();
+            state.LexemeCategory = None;
             edges.push(Edge {
                 fromState: state.stateId,
                 nextState: g2_start_id,
@@ -515,14 +513,14 @@ pub fn closure(mut g: Graph) -> Graph {
     states.push(State {
         stateId: 0,
         StateType: "UNMATCH".to_string(),
-        LexemeCategory: String::new(),
+        LexemeCategory: None,
     });
     states.extend(g.pStateTable.clone());
     let accept_id = states.len() as i32;
     states.push(State {
         stateId: accept_id,
         StateType: "MATCH".to_string(),
-        LexemeCategory: String::new(),
+        LexemeCategory: None,
     });
 
     let mut edges = g.pEdgeTable.clone();
@@ -579,14 +577,14 @@ pub fn zeroOrOne(mut g: Graph) -> Graph {
     states.push(State {
         stateId: 0,
         StateType: "UNMATCH".to_string(),
-        LexemeCategory: String::new(),
+        LexemeCategory: None,
     });
     states.extend(g.pStateTable.clone());
     let accept_id = states.len() as i32;
     states.push(State {
         stateId: accept_id,
         StateType: "MATCH".to_string(),
-        LexemeCategory: String::new(),
+        LexemeCategory: None,
     });
 
     let mut edges = g.pEdgeTable.clone();
