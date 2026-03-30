@@ -3,8 +3,6 @@
 
 use super::category::LexemeCategory;
 
-use super::category::LexemeCategory;
-
 #[derive(Clone, Debug)]
 pub struct Token {
     /// 词法类别（强类型）
