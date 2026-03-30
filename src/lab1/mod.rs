@@ -1,12 +1,14 @@
 #![allow(non_snake_case)]
 
 pub mod char_set;
+pub mod category;
 pub mod edge;
 pub mod graph;
 pub mod regular_expression;
 pub mod state;
 pub mod token;
 
+pub use category::LexemeCategory;
 pub use char_set::{
     difference_charset_char,
     difference_charsets,
@@ -85,40 +87,44 @@ pub fn create_tiny_lexical_dfa() -> Graph {
 
     // 运算符与界符 NFA
     let graph_assign = product(
-        generateBasicNFA("CHAR", char_set_colon, ""),
-        generateBasicNFA("CHAR", char_set_equal, ":="),
+        generateBasicNFA("CHAR", char_set_colon, None),
+        generateBasicNFA("CHAR", char_set_equal, Some(LexemeCategory::ASSIGN_OPERATOR)),
     );
     let operator_graph = union_many(vec![
-        generateBasicNFA("CHAR", char_set_add, "+"),
-        generateBasicNFA("CHAR", char_set_sub, "-"),
-        generateBasicNFA("CHAR", char_set_mul, "*"),
-        generateBasicNFA("CHAR", char_set_div, "/"),
-        generateBasicNFA("CHAR", char_set_equal, "="),
-        generateBasicNFA("CHAR", char_set_less, "<"),
-        generateBasicNFA("CHAR", char_set_left_paren, "("),
-        generateBasicNFA("CHAR", char_set_right_paren, ")"),
-        generateBasicNFA("CHAR", char_set_semicolon, ";"),
+        generateBasicNFA("CHAR", char_set_add, Some(LexemeCategory::NUMERIC_OPERATOR)),
+        generateBasicNFA("CHAR", char_set_sub, Some(LexemeCategory::NUMERIC_OPERATOR)),
+        generateBasicNFA("CHAR", char_set_mul, Some(LexemeCategory::NUMERIC_OPERATOR)),
+        generateBasicNFA("CHAR", char_set_div, Some(LexemeCategory::NUMERIC_OPERATOR)),
+        generateBasicNFA("CHAR", char_set_equal, Some(LexemeCategory::COMPARE_OPERATOR)),
+        generateBasicNFA("CHAR", char_set_less, Some(LexemeCategory::COMPARE_OPERATOR)),
+        generateBasicNFA("CHAR", char_set_left_paren, Some(LexemeCategory::LOGIC_OPERATOR)),
+        generateBasicNFA("CHAR", char_set_right_paren, Some(LexemeCategory::LOGIC_OPERATOR)),
+        generateBasicNFA("CHAR", char_set_semicolon, Some(LexemeCategory::LOGIC_OPERATOR)),
         graph_assign,
     ]);
 
     // 标识符 (letter letterOrDigit*)
     let graph_identifier = product(
-        generateBasicNFA("CHARSET", letters, ""),
-        closure(generateBasicNFA("CHARSET", letter_digit, "identifier")),
+        generateBasicNFA("CHARSET", letters, None),
+        closure(generateBasicNFA("CHARSET", letter_digit, Some(LexemeCategory::ID))),
     );
 
     // 注释 { ... }
     let graph_note = product(
         product(
-            generateBasicNFA("CHAR", char_set_left_note, ""),
-            closure(generateBasicNFA("CHARSET", note_char_set, "")),
+            generateBasicNFA("CHAR", char_set_left_note, None),
+            closure(generateBasicNFA("CHARSET", note_char_set, None)),
         ),
-        generateBasicNFA("CHAR", char_set_right_note, "NOTE"),
+        generateBasicNFA("CHAR", char_set_right_note, Some(LexemeCategory::NOTE)),
     );
 
     // 数字与空白
-    let graph_number = plusClosure(generateBasicNFA("CHARSET", digit, "Number"));
-    let graph_blank = generateBasicNFA("CHAR", char_set_space, "BLANK");
+    let graph_number = plusClosure(generateBasicNFA(
+        "CHARSET",
+        digit,
+        Some(LexemeCategory::INTEGER_CONST),
+    ));
+    let graph_blank = generateBasicNFA("CHAR", char_set_space, Some(LexemeCategory::SPACE_CONST));
 
     let lexical_graph = union_many(vec![
         keyword_graph,
@@ -150,14 +156,18 @@ fn char_set_for(single_letters: &[i32], ch: char) -> i32 {
 fn build_keyword_graph(word: &str, single_letters: &[i32]) -> Graph {
     let chars: Vec<char> = word.chars().collect();
     let first = *chars.first().expect("keyword 不能为空");
-    let mut graph = generateBasicNFA("CHAR", char_set_for(single_letters, first), "");
+    let mut graph = generateBasicNFA("CHAR", char_set_for(single_letters, first), None);
     if chars.len() == 1 {
-        graph.pStateTable.last_mut().unwrap().LexemeCategory = "KEYWORD".to_string();
+        graph.pStateTable.last_mut().unwrap().LexemeCategory = Some(LexemeCategory::KEYWORD);
         return graph;
     }
     for (index, ch) in chars.iter().enumerate().skip(1) {
         let is_last = index == chars.len() - 1;
-        let category = if is_last { "KEYWORD" } else { "" };
+        let category = if is_last {
+            Some(LexemeCategory::KEYWORD)
+        } else {
+            None
+        };
         graph = product(graph, generateBasicNFA("CHAR", char_set_for(single_letters, *ch), category));
     }
     graph
