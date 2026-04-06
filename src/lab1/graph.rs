@@ -1,645 +1,2256 @@
-#![allow(non_snake_case)]
+﻿#![allow(non_snake_case)]
+
 #![allow(dead_code)]
 
+
+
 use once_cell::sync::Lazy;
-use std::collections::{HashSet, VecDeque};
+
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+
 use std::sync::Mutex;
 
-use super::char_set::{has_contain_char, is_subset, segments_of};
+
+
 use super::category::LexemeCategory;
+
+use super::char_set::{has_contain_char, is_subset, segments_of};
+
 use super::edge::Edge;
+
 use super::state::State;
+
 use super::token::Token;
 
-/// 图结构，既可表示 NFA 也可表示 DFA
+
+
+/// 图结构，既可表示 NFA（非确定有限状态自动机），也可表示 DFA（确定有限状态自动机）
+
 #[derive(Clone, Debug)]
+
 pub struct Graph {
+
+    /// 自动机图的唯一标识 ID
+
     pub graphId: i32,
+
+    /// 自动机状态的数量
+
     pub numOfStates: i32,
+
+    /// 边的表（保存整个图中所有的状态转移）
+
     pub pEdgeTable: Vec<Edge>,
+
+    /// 状态的表（保存图中的所有状态信息，包括是否为结束状态等）
+
     pub pStateTable: Vec<State>,
+
 }
+
+
 
 static CURR_GRAPH_NUM: Lazy<Mutex<i32>> = Lazy::new(|| Mutex::new(0));
 
+
+
 fn next_graph_id() -> i32 {
+
     let mut guard = CURR_GRAPH_NUM.lock().unwrap();
+
     *guard += 1;
+
     *guard
+
 }
+
+
 
 pub fn reset_graph_counter() {
+
     *CURR_GRAPH_NUM.lock().unwrap() = 0;
+
 }
 
-impl Graph {
-    /// 构造给定状态数量的空图
-    pub fn new(num_states: i32) -> Self {
-        Self {
-            graphId: next_graph_id(),
-            numOfStates: num_states,
-            pEdgeTable: Vec::new(),
-            pStateTable: Vec::new(),
-        }
-    }
 
-    /// 深拷贝当前图
-    pub fn copyGraph(&self) -> Graph {
-        self.clone()
-    }
 
-    /// 在 driverId 边集上进行 move 操作
-    pub fn move_by_driver(&self, curr: &HashSet<i32>, driver_id: i32) -> HashSet<i32> {
-        let mut result = HashSet::new();
-        for edge in &self.pEdgeTable {
-            if curr.contains(&edge.fromState) && edge.driverId == driver_id {
-                result.insert(edge.nextState);
-            }
-        }
-        result
-    }
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 
-    /// 用实际字符触发 move，匹配 CHARSET 边
-    pub fn move_by_char(&self, curr: &HashSet<i32>, c: char) -> HashSet<i32> {
-        let mut result = HashSet::new();
-        for edge in &self.pEdgeTable {
-            if curr.contains(&edge.fromState) && edge.driverId != -1 && is_subset(c, edge.driverId)
-            {
-                result.insert(edge.nextState);
-            }
-        }
-        result
-    }
+struct DriverKey {
 
-    /// 计算 epsilon 闭包
-    pub fn epsilon_closure(&self, curr: &HashSet<i32>) -> HashSet<i32> {
-        let mut result = curr.clone();
-        let mut queue: VecDeque<i32> = curr.iter().cloned().collect();
-        while let Some(state) = queue.pop_front() {
-            for edge in &self.pEdgeTable {
-                if edge.fromState == state && edge.driverId == -1 && edge.DriverType == "NULL" {
-                    if result.insert(edge.nextState) {
-                        queue.push_back(edge.nextState);
-                    }
-                }
-            }
-        }
-        result
-    }
+    driver_id: i32,
 
-    /// DTran 封装：在指定 driver 上 move + epsilon
-    pub fn DTran_driver(&self, curr: &HashSet<i32>, driver_id: i32) -> HashSet<i32> {
-        let moved = self.move_by_driver(curr, driver_id);
-        self.epsilon_closure(&moved)
-    }
+    driver_type: String,
 
-    /// DTran 封装：用字符驱动 move + epsilon
-    pub fn DTran_char(&self, curr: &HashSet<i32>, c: char) -> HashSet<i32> {
-        let moved = self.move_by_char(curr, c);
-        self.epsilon_closure(&moved)
-    }
+}
 
-    /// 经典 subset construction 将 NFA 转为 DFA
-    pub fn NFA_to_DFA(&self) -> Graph {
-        let mut node_list = Vec::new();
-        let mut edge_list = Vec::new();
-        let mut dfa_state_sets: Vec<HashSet<i32>> = Vec::new();
-        let mut queue: VecDeque<HashSet<i32>> = VecDeque::new();
 
-        // 先将 NFA 起点做 epsilon 闭包，得到 DFA 初态对应的 NFA 状态集合。
-        let mut start_set = HashSet::new();
-        start_set.insert(0);
-        start_set = self.epsilon_closure(&start_set);
-        dfa_state_sets.push(start_set.clone());
-        queue.push_back(start_set.clone());
 
-        while let Some(curr_set) = queue.pop_front() {
-            let curr_state_id = dfa_state_sets
-                .iter()
-                .position(|set| *set == curr_set)
-                .unwrap();
+fn is_epsilon_edge(edge: &Edge) -> bool {
 
-            let mut just_char_set = HashSet::new();
-            let mut diff_char_set = HashSet::new();
+    edge.driverId == -1 && edge.DriverType == "NULL"
 
-            // 收集当前集合可用的驱动边，区分 CHAR 与 CHARSET。
-            // 这样做是为了分别调用 DTran_char 与 DTran_driver，
-            // 避免把“单字符边”和“字符集边”的匹配逻辑混在一起。
-            for edge in &self.pEdgeTable {
-                if curr_set.contains(&edge.fromState) && edge.driverId != -1 {
-                    if edge.DriverType == "CHARSET" {
-                        diff_char_set.insert(edge.driverId);
-                    } else if edge.DriverType == "CHAR" {
-                        just_char_set.insert(edge.driverId);
-                    }
-                }
-            }
+}
 
-            // 单字符驱动转移：
-            // CHAR 的 driver_id 在本实现中仍落在字符集表中，因此取首段字符进行触发。
-            for driver_id in just_char_set {
-                let mut c = '?';
-                for segment in segments_of(driver_id) {
-                    c = segment.fromChar;
-                    break;
-                }
-                let next_set = self.DTran_char(&curr_set, c);
-                handle_state_transition(
-                    &mut dfa_state_sets,
-                    &mut queue,
-                    &mut edge_list,
-                    curr_state_id as i32,
-                    driver_id,
-                    "CHAR",
-                    next_set,
-                );
-            }
 
-            // 字符集驱动转移：直接使用 driver_id 做集合级 move。
-            for driver_id in diff_char_set {
-                let next_set = self.DTran_driver(&curr_set, driver_id);
-                handle_state_transition(
-                    &mut dfa_state_sets,
-                    &mut queue,
-                    &mut edge_list,
-                    curr_state_id as i32,
-                    driver_id,
-                    "CHARSET",
-                    next_set,
-                );
-            }
-        }
 
-        // 根据状态集合生成 DFA 状态信息：
-        // - 只要集合内存在 MATCH 态，DFA 态初步判定为 MATCH；
-        // - 类别冲突时优先选择“非 ID 类别”（例如 KEYWORD 优先于 ID）；
-        // - 若最终没有可用类别，则降级为 UNMATCH，避免产生无类别接受态。
-        for (idx, state_set) in dfa_state_sets.iter().enumerate() {
-            let contains_match = state_set.iter().any(|state_id| {
-                self.pStateTable
-                    .get(*state_id as usize)
-                    .map(|s| s.StateType == "MATCH")
-                    .unwrap_or(false)
-            });
+fn pick_preferred_category_from_ids<I>(
 
-            let mut match_type = if contains_match {
-                "MATCH".to_string()
-            } else {
-                "UNMATCH".to_string()
-            };
-            let mut category: Option<LexemeCategory> = None;
+    state_ids: I,
 
-            for state in state_set {
-                let st = &self.pStateTable[*state as usize];
-                if let Some(state_category) = &st.LexemeCategory {
-                    if *state_category != LexemeCategory::ID {
-                        category = Some(state_category.clone());
-                        break;
-                    } else if category.is_none() {
-                        category = Some(LexemeCategory::ID);
-                    }
-                }
-            }
+    state_table: &[State],
 
-            if category.is_none() && match_type == "MATCH" {
-                match_type = "UNMATCH".to_string();
-            }
+) -> Option<LexemeCategory>
 
-            node_list.push(State {
-                stateId: idx as i32,
-                StateType: match_type,
-                LexemeCategory: category,
-            });
-        }
+where
 
-        Graph {
-            graphId: next_graph_id(),
-            numOfStates: node_list.len() as i32,
-            pEdgeTable: edge_list,
-            pStateTable: node_list,
-        }
-    }
+    I: IntoIterator<Item = i32>,
 
-    /// 对长文本进行 DFA 扫描
-    pub fn long_text_search(&self, text: &str) -> Vec<Token> {
-        let mut result = Vec::new();
-        let mut next_state = 0;
-        let mut buffer = String::new();
+{
 
-        for c in text.chars() {
-            let mut has_next = false;
-            // 检查当前状态是否存在可消费字符 c 的边。
-            for edge in &self.pEdgeTable {
-                if edge.fromState == next_state
-                    && edge.driverId != -1
-                    && has_contain_char(edge.driverId, c)
-                {
-                    next_state = edge.nextState;
-                    has_next = true;
-                    break;
-                }
-            }
+    let mut ids: Vec<i32> = state_ids.into_iter().collect();
 
-            if !has_next {
-                if let Some(token) = self.build_token(next_state, &buffer) {
-                    result.push(token);
-                }
-                buffer.clear();
-                buffer.push(c);
-                next_state = 0;
-                // 从初态重新尝试匹配当前字符，支持“最长前缀截断后继续扫描”的行为。
-                for edge in &self.pEdgeTable {
-                    if edge.fromState == next_state
-                        && edge.driverId != -1
-                        && has_contain_char(edge.driverId, c)
-                    {
-                        next_state = edge.nextState;
-                        break;
-                    }
-                }
-            } else {
-                buffer.push(c);
-            }
-        }
+    ids.sort_unstable();
 
-        if let Some(token) = self.build_token(next_state, &buffer) {
-            result.push(token);
-        }
+    ids.dedup();
 
-        result
-    }
 
-    /// 获取某个词素的类别
-    pub fn get_lexeme_category(&self, text: &str) -> Option<LexemeCategory> {
-        let mut curr_state = 0;
-        for c in text.chars() {
-            let mut jumped = false;
-            for edge in &self.pEdgeTable {
-                if edge.fromState == curr_state
-                    && edge.driverId != -1
-                    && has_contain_char(edge.driverId, c)
-                {
-                    curr_state = edge.nextState;
-                    jumped = true;
-                    break;
-                }
-            }
-            if !jumped {
-                return None;
-            }
-        }
-        self.pStateTable[curr_state as usize].LexemeCategory.clone()
-    }
 
-    /// 根据当前状态生成 token
-    fn build_token(&self, state_idx: i32, buffer: &str) -> Option<Token> {
-        if state_idx < 0 || state_idx as usize >= self.pStateTable.len() {
-            return None;
-        }
-        let state = &self.pStateTable[state_idx as usize];
-        let category = state.LexemeCategory.clone()?;
-        // NOTE / SPACE_CONST 默认不对外输出 token。
-        if category == LexemeCategory::SPACE_CONST || category == LexemeCategory::NOTE {
-            return None;
-        }
+    let mut fallback_id = None;
 
-        let mut token = Token {
-            lexeme_category: category.clone(),
-            symbol_type: "TERMINAL".to_string(),
-            identify: None,
-            value: None,
+    for sid in ids {
+
+        let Some(state) = state_table.get(sid as usize) else {
+
+            continue;
+
         };
 
-        // 依据类别填充 token 的附加字段：
-        // - ID / KEYWORD 记录原词素到 identify；
-        // - INTEGER_CONST 尝试解析数值写入 value。
-        if category == LexemeCategory::ID {
-            token.identify = Some(buffer.to_string());
-        } else if category == LexemeCategory::INTEGER_CONST {
-            token.value = buffer.parse::<i64>().ok();
-        } else if category == LexemeCategory::KEYWORD {
-            token.identify = Some(buffer.to_string());
+        if let Some(category) = &state.LexemeCategory {
+
+            if *category != LexemeCategory::ID {
+
+                return Some(category.clone());
+
+            }
+
+            if fallback_id.is_none() {
+
+                fallback_id = Some(LexemeCategory::ID);
+
+            }
+
         }
+
+    }
+
+    fallback_id
+
+}
+
+
+
+fn category_code(category: &Option<LexemeCategory>) -> i32 {
+
+    match category {
+
+        None => -1,
+
+        Some(LexemeCategory::KEYWORD) => 0,
+
+        Some(LexemeCategory::ASSIGN_OPERATOR) => 1,
+
+        Some(LexemeCategory::COMPARE_OPERATOR) => 2,
+
+        Some(LexemeCategory::NUMERIC_OPERATOR) => 3,
+
+        Some(LexemeCategory::LOGIC_OPERATOR) => 4,
+
+        Some(LexemeCategory::INTEGER_CONST) => 5,
+
+        Some(LexemeCategory::FLOAT_CONST) => 6,
+
+        Some(LexemeCategory::SCIENTIFIC_CONST) => 7,
+
+        Some(LexemeCategory::STRING_CONST) => 8,
+
+        Some(LexemeCategory::NOTE) => 9,
+
+        Some(LexemeCategory::SPACE_CONST) => 10,
+
+        Some(LexemeCategory::ID) => 11,
+
+    }
+
+}
+
+
+
+fn build_state_signature(graph: &Graph, state_id: i32, state_to_block: &[usize]) -> String {
+
+    let mut grouped: BTreeMap<DriverKey, Vec<usize>> = BTreeMap::new();
+
+
+
+    for edge in &graph.pEdgeTable {
+
+        if edge.fromState != state_id {
+
+            continue;
+
+        }
+
+        let Some(&target_block) = state_to_block.get(edge.nextState as usize) else {
+
+            continue;
+
+        };
+
+        let key = DriverKey {
+
+            driver_id: edge.driverId,
+
+            driver_type: edge.DriverType.clone(),
+
+        };
+
+        grouped.entry(key).or_default().push(target_block);
+
+    }
+
+
+
+    let mut chunks = Vec::new();
+
+    for (key, mut blocks) in grouped {
+
+        blocks.sort_unstable();
+
+        blocks.dedup();
+
+        chunks.push(format!(
+
+            "{}#{}->{:?}",
+
+            key.driver_type, key.driver_id, blocks
+
+        ));
+
+    }
+
+
+
+    let state = &graph.pStateTable[state_id as usize];
+
+    format!(
+
+        "A:{}|C:{}|T:{}",
+
+        state.StateType == "MATCH",
+
+        category_code(&state.LexemeCategory),
+
+        chunks.join("|")
+
+    )
+
+}
+
+
+
+impl Graph {
+
+    /// 构造给定状态数量的空图
+
+    pub fn new(num_states: i32) -> Self {
+
+        Self {
+
+            graphId: next_graph_id(),
+
+            numOfStates: num_states,
+
+            pEdgeTable: Vec::new(),
+
+            pStateTable: Vec::new(),
+
+        }
+
+    }
+
+
+
+    /// 深拷贝当前图
+
+    pub fn copyGraph(&self) -> Graph {
+
+        self.clone()
+
+    }
+
+
+
+    /// 在 driverId 边集上进行 move 操作
+
+    /// 经过精简和优化的 NFA，去除不必要的冗余状态和空跳边
+
+    pub fn minimize_nfa(&self) -> Graph {
+
+        let epsilon_free = self.build_epsilon_free_nfa();
+
+        let pruned = epsilon_free.prune_useless_states();
+
+        let merged = pruned.merge_equivalent_states();
+
+        merged.prune_useless_states()
+
+    }
+
+
+
+    fn build_epsilon_free_nfa(&self) -> Graph {
+
+        let state_count = self.pStateTable.len();
+
+        if state_count == 0 {
+
+            return Graph {
+
+                graphId: next_graph_id(),
+
+                numOfStates: 0,
+
+                pEdgeTable: Vec::new(),
+
+                pStateTable: Vec::new(),
+
+            };
+
+        }
+
+
+
+        let mut closures: Vec<HashSet<i32>> = Vec::with_capacity(state_count);
+
+        for sid in 0..state_count {
+
+            let mut seed = HashSet::new();
+
+            seed.insert(sid as i32);
+
+            closures.push(self.epsilon_closure(&seed));
+
+        }
+
+
+
+        let mut states = Vec::with_capacity(state_count);
+
+        for sid in 0..state_count {
+
+            let closure = &closures[sid];
+
+            let is_match = closure.iter().any(|state_id| {
+
+                self.pStateTable
+
+                    .get(*state_id as usize)
+
+                    .map(|s| s.StateType == "MATCH")
+
+                    .unwrap_or(false)
+
+            });
+
+            let category = if is_match {
+
+                pick_preferred_category_from_ids(closure.iter().copied(), &self.pStateTable)
+
+            } else {
+
+                None
+
+            };
+
+
+
+            states.push(State {
+
+                stateId: sid as i32,
+
+                StateType: if is_match {
+
+                    "MATCH".to_string()
+
+                } else {
+
+                    "UNMATCH".to_string()
+
+                },
+
+                LexemeCategory: category,
+
+            });
+
+        }
+
+
+
+        let mut edges = Vec::new();
+
+        let mut seen: HashSet<(i32, i32, i32, String)> = HashSet::new();
+
+
+
+        for sid in 0..state_count {
+
+            let mut grouped_targets: HashMap<DriverKey, HashSet<i32>> = HashMap::new();
+
+            for inner_state in &closures[sid] {
+
+                for edge in &self.pEdgeTable {
+
+                    if edge.fromState != *inner_state || is_epsilon_edge(edge) {
+
+                        continue;
+
+                    }
+
+                    let Some(target_closure) = closures.get(edge.nextState as usize) else {
+
+                        continue;
+
+                    };
+
+                    let key = DriverKey {
+
+                        driver_id: edge.driverId,
+
+                        driver_type: edge.DriverType.clone(),
+
+                    };
+
+                    let target_bucket = grouped_targets.entry(key).or_default();
+
+                    for target in target_closure {
+
+                        target_bucket.insert(*target);
+
+                    }
+
+                }
+
+            }
+
+
+
+            for (key, targets) in grouped_targets {
+
+                let driver_id = key.driver_id;
+
+                let driver_type = key.driver_type;
+
+                for target in targets {
+
+                    let dedup_key = (sid as i32, target, driver_id, driver_type.clone());
+
+                    if seen.insert(dedup_key) {
+
+                        edges.push(Edge {
+
+                            fromState: sid as i32,
+
+                            nextState: target,
+
+                            driverId: driver_id,
+
+                            DriverType: driver_type.clone(),
+
+                        });
+
+                    }
+
+                }
+
+            }
+
+        }
+
+
+
+        Graph {
+
+            graphId: next_graph_id(),
+
+            numOfStates: states.len() as i32,
+
+            pEdgeTable: edges,
+
+            pStateTable: states,
+
+        }
+
+    }
+
+
+
+    fn rebuild_with_state_subset(&self, keep_ids: &[i32]) -> Graph {
+
+        if keep_ids.is_empty() {
+
+            return Graph {
+
+                graphId: next_graph_id(),
+
+                numOfStates: 0,
+
+                pEdgeTable: Vec::new(),
+
+                pStateTable: Vec::new(),
+
+            };
+
+        }
+
+
+
+        let mut ordered = keep_ids.to_vec();
+
+        ordered.sort_unstable();
+
+        ordered.dedup();
+
+        ordered.retain(|sid| *sid >= 0 && (*sid as usize) < self.pStateTable.len());
+
+        if let Some(pos) = ordered.iter().position(|sid| *sid == 0) {
+
+            ordered.swap(0, pos);
+
+        }
+
+
+
+        let mut old_to_new: HashMap<i32, i32> = HashMap::new();
+
+        for (new_id, old_id) in ordered.iter().enumerate() {
+
+            old_to_new.insert(*old_id, new_id as i32);
+
+        }
+
+
+
+        let mut states = Vec::with_capacity(ordered.len());
+
+        for (new_id, old_id) in ordered.iter().enumerate() {
+
+            let old_state = &self.pStateTable[*old_id as usize];
+
+            states.push(State {
+
+                stateId: new_id as i32,
+
+                StateType: old_state.StateType.clone(),
+
+                LexemeCategory: old_state.LexemeCategory.clone(),
+
+            });
+
+        }
+
+
+
+        let mut edges = Vec::new();
+
+        let mut seen: HashSet<(i32, i32, i32, String)> = HashSet::new();
+
+        for edge in &self.pEdgeTable {
+
+            let (Some(&from), Some(&to)) = (
+
+                old_to_new.get(&edge.fromState),
+
+                old_to_new.get(&edge.nextState),
+
+            ) else {
+
+                continue;
+
+            };
+
+
+
+            let dedup_key = (from, to, edge.driverId, edge.DriverType.clone());
+
+            if seen.insert(dedup_key) {
+
+                edges.push(Edge {
+
+                    fromState: from,
+
+                    nextState: to,
+
+                    driverId: edge.driverId,
+
+                    DriverType: edge.DriverType.clone(),
+
+                });
+
+            }
+
+        }
+
+
+
+        Graph {
+
+            graphId: next_graph_id(),
+
+            numOfStates: states.len() as i32,
+
+            pEdgeTable: edges,
+
+            pStateTable: states,
+
+        }
+
+    }
+
+
+
+    fn prune_useless_states(&self) -> Graph {
+
+        if self.pStateTable.is_empty() {
+
+            return self.clone();
+
+        }
+
+
+
+        let mut reachable = HashSet::new();
+
+        let mut queue = VecDeque::new();
+
+        reachable.insert(0);
+
+        queue.push_back(0);
+
+
+
+        while let Some(curr) = queue.pop_front() {
+
+            for edge in &self.pEdgeTable {
+
+                if edge.fromState == curr && reachable.insert(edge.nextState) {
+
+                    queue.push_back(edge.nextState);
+
+                }
+
+            }
+
+        }
+
+
+
+        let mut reverse_adj: Vec<Vec<i32>> = vec![Vec::new(); self.pStateTable.len()];
+
+        let mut accept_states = Vec::new();
+
+        for state in &self.pStateTable {
+
+            if state.StateType == "MATCH" {
+
+                accept_states.push(state.stateId);
+
+            }
+
+        }
+
+        for edge in &self.pEdgeTable {
+
+            if edge.nextState >= 0
+
+                && edge.fromState >= 0
+
+                && (edge.nextState as usize) < reverse_adj.len()
+
+                && (edge.fromState as usize) < reverse_adj.len()
+
+            {
+
+                reverse_adj[edge.nextState as usize].push(edge.fromState);
+
+            }
+
+        }
+
+
+
+        let mut productive = HashSet::new();
+
+        let mut reverse_queue = VecDeque::new();
+
+        for accept in accept_states {
+
+            if productive.insert(accept) {
+
+                reverse_queue.push_back(accept);
+
+            }
+
+        }
+
+        while let Some(curr) = reverse_queue.pop_front() {
+
+            if curr < 0 || curr as usize >= reverse_adj.len() {
+
+                continue;
+
+            }
+
+            for prev in &reverse_adj[curr as usize] {
+
+                if productive.insert(*prev) {
+
+                    reverse_queue.push_back(*prev);
+
+                }
+
+            }
+
+        }
+
+
+
+        let mut keep: Vec<i32> = reachable.intersection(&productive).copied().collect();
+
+        if keep.is_empty() {
+
+            keep.push(0);
+
+        }
+
+        self.rebuild_with_state_subset(&keep)
+
+    }
+
+
+
+    fn merge_equivalent_states(&self) -> Graph {
+
+        if self.pStateTable.len() <= 1 {
+
+            return self.clone();
+
+        }
+
+
+
+        let mut init_groups: BTreeMap<String, Vec<i32>> = BTreeMap::new();
+
+        for state in &self.pStateTable {
+
+            let key = format!(
+
+                "{}#{}",
+
+                state.StateType == "MATCH",
+
+                category_code(&state.LexemeCategory)
+
+            );
+
+            init_groups.entry(key).or_default().push(state.stateId);
+
+        }
+
+        let mut partitions: Vec<Vec<i32>> = init_groups.into_values().collect();
+
+        for block in &mut partitions {
+
+            block.sort_unstable();
+
+        }
+
+
+
+        loop {
+
+            let mut state_to_block = vec![0usize; self.pStateTable.len()];
+
+            for (block_id, block) in partitions.iter().enumerate() {
+
+                for sid in block {
+
+                    if *sid >= 0 && (*sid as usize) < state_to_block.len() {
+
+                        state_to_block[*sid as usize] = block_id;
+
+                    }
+
+                }
+
+            }
+
+
+
+            let mut changed = false;
+
+            let mut next_partitions: Vec<Vec<i32>> = Vec::new();
+
+
+
+            for block in &partitions {
+
+                let mut buckets: BTreeMap<String, Vec<i32>> = BTreeMap::new();
+
+                for sid in block {
+
+                    let signature = build_state_signature(self, *sid, &state_to_block);
+
+                    buckets.entry(signature).or_default().push(*sid);
+
+                }
+
+                if buckets.len() > 1 {
+
+                    changed = true;
+
+                }
+
+                for (_, mut group) in buckets {
+
+                    group.sort_unstable();
+
+                    next_partitions.push(group);
+
+                }
+
+            }
+
+
+
+            partitions = next_partitions;
+
+            if !changed {
+
+                break;
+
+            }
+
+        }
+
+
+
+        if let Some(pos) = partitions.iter().position(|block| block.contains(&0)) {
+
+            partitions.swap(0, pos);
+
+        }
+
+
+
+        let mut old_to_new: HashMap<i32, i32> = HashMap::new();
+
+        for (new_id, block) in partitions.iter().enumerate() {
+
+            for sid in block {
+
+                old_to_new.insert(*sid, new_id as i32);
+
+            }
+
+        }
+
+
+
+        let mut states = Vec::with_capacity(partitions.len());
+
+        for (new_id, block) in partitions.iter().enumerate() {
+
+            let is_match = block.iter().any(|sid| {
+
+                self.pStateTable
+
+                    .get(*sid as usize)
+
+                    .map(|s| s.StateType == "MATCH")
+
+                    .unwrap_or(false)
+
+            });
+
+            let category = if is_match {
+
+                pick_preferred_category_from_ids(block.iter().copied(), &self.pStateTable)
+
+            } else {
+
+                None
+
+            };
+
+
+
+            states.push(State {
+
+                stateId: new_id as i32,
+
+                StateType: if is_match {
+
+                    "MATCH".to_string()
+
+                } else {
+
+                    "UNMATCH".to_string()
+
+                },
+
+                LexemeCategory: category,
+
+            });
+
+        }
+
+
+
+        let mut edges = Vec::new();
+
+        let mut seen: HashSet<(i32, i32, i32, String)> = HashSet::new();
+
+        for edge in &self.pEdgeTable {
+
+            let (Some(&from), Some(&to)) = (
+
+                old_to_new.get(&edge.fromState),
+
+                old_to_new.get(&edge.nextState),
+
+            ) else {
+
+                continue;
+
+            };
+
+            let dedup_key = (from, to, edge.driverId, edge.DriverType.clone());
+
+            if seen.insert(dedup_key) {
+
+                edges.push(Edge {
+
+                    fromState: from,
+
+                    nextState: to,
+
+                    driverId: edge.driverId,
+
+                    DriverType: edge.DriverType.clone(),
+
+                });
+
+            }
+
+        }
+
+
+
+        Graph {
+
+            graphId: next_graph_id(),
+
+            numOfStates: states.len() as i32,
+
+            pEdgeTable: edges,
+
+            pStateTable: states,
+
+        }
+
+    }
+
+
+
+    pub fn move_by_driver(&self, curr: &HashSet<i32>, driver_id: i32) -> HashSet<i32> {
+
+        let mut result = HashSet::new();
+
+        for edge in &self.pEdgeTable {
+
+            if curr.contains(&edge.fromState) && edge.driverId == driver_id {
+
+                result.insert(edge.nextState);
+
+            }
+
+        }
+
+        result
+
+    }
+
+    /// Move by concrete character on CHAR/CHARSET edges.
+
+    pub fn move_by_char(&self, curr: &HashSet<i32>, c: char) -> HashSet<i32> {
+
+        let mut result = HashSet::new();
+
+        for edge in &self.pEdgeTable {
+
+            if curr.contains(&edge.fromState) && edge.driverId != -1 && is_subset(c, edge.driverId)
+
+            {
+
+                result.insert(edge.nextState);
+
+            }
+
+        }
+
+        result
+
+    }
+
+
+
+    /// 计算 epsilon 闭包
+
+    pub fn epsilon_closure(&self, curr: &HashSet<i32>) -> HashSet<i32> {
+
+        let mut result = curr.clone();
+
+        let mut queue: VecDeque<i32> = curr.iter().cloned().collect();
+
+        while let Some(state) = queue.pop_front() {
+
+            for edge in &self.pEdgeTable {
+
+                if edge.fromState == state && edge.driverId == -1 && edge.DriverType == "NULL" {
+
+                    if result.insert(edge.nextState) {
+
+                        queue.push_back(edge.nextState);
+
+                    }
+
+                }
+
+            }
+
+        }
+
+        result
+
+    }
+
+
+
+    /// DTran 封装：在指定 driver 上 move + epsilon
+
+    pub fn DTran_driver(&self, curr: &HashSet<i32>, driver_id: i32) -> HashSet<i32> {
+
+        let moved = self.move_by_driver(curr, driver_id);
+
+        self.epsilon_closure(&moved)
+
+    }
+
+
+
+    /// DTran 封装：用字符驱动 move + epsilon
+
+    pub fn DTran_char(&self, curr: &HashSet<i32>, c: char) -> HashSet<i32> {
+
+        let moved = self.move_by_char(curr, c);
+
+        self.epsilon_closure(&moved)
+
+    }
+
+
+
+    /// 经典 subset construction 将 NFA 转为 DFA
+
+    /// 将当前的 NFA (非确定性有限自动机) 转化为 DFA (确定性有限自动机)
+
+    /// 使用的是经典的子集构造法 (Subset Construction Algorithm)
+
+    pub fn NFA_to_DFA(&self) -> Graph {
+
+        let mut node_list = Vec::new();
+
+        let mut edge_list = Vec::new();
+
+        let mut dfa_state_sets: Vec<HashSet<i32>> = Vec::new();
+
+        let mut queue: VecDeque<HashSet<i32>> = VecDeque::new();
+
+        let mut start_set = HashSet::new();
+
+        start_set.insert(0);
+
+        start_set = self.epsilon_closure(&start_set);
+
+        dfa_state_sets.push(start_set.clone());
+
+        queue.push_back(start_set.clone());
+
+
+
+        while let Some(curr_set) = queue.pop_front() {
+
+            let curr_state_id = dfa_state_sets
+
+                .iter()
+
+                .position(|set| *set == curr_set)
+
+                .unwrap();
+
+
+
+            let mut just_char_set = HashSet::new();
+
+            let mut diff_char_set = HashSet::new();
+
+
+
+            for edge in &self.pEdgeTable {
+
+                if curr_set.contains(&edge.fromState) && edge.driverId != -1 {
+
+                    if edge.DriverType == "CHARSET" {
+
+                        diff_char_set.insert(edge.driverId);
+
+                    } else if edge.DriverType == "CHAR" {
+
+                        just_char_set.insert(edge.driverId);
+
+                    }
+
+                }
+
+            }
+
+
+
+            // 单字符驱动转移：
+
+            for driver_id in just_char_set {
+
+                let mut c = '?';
+
+                for segment in segments_of(driver_id) {
+
+                    c = segment.fromChar;
+
+                    break;
+
+                }
+
+                let next_set = self.DTran_char(&curr_set, c);
+
+                handle_state_transition(
+
+                    &mut dfa_state_sets,
+
+                    &mut queue,
+
+                    &mut edge_list,
+
+                    curr_state_id as i32,
+
+                    driver_id,
+
+                    "CHAR",
+
+                    next_set,
+
+                );
+
+            }
+
+
+
+            for driver_id in diff_char_set {
+
+                let next_set = self.DTran_driver(&curr_set, driver_id);
+
+                handle_state_transition(
+
+                    &mut dfa_state_sets,
+
+                    &mut queue,
+
+                    &mut edge_list,
+
+                    curr_state_id as i32,
+
+                    driver_id,
+
+                    "CHARSET",
+
+                    next_set,
+
+                );
+
+            }
+
+        }
+
+
+
+        // 根据状态集合生成 DFA 状态信息：
+
+        // - 只要集合内存在 MATCH 态，DFA 态初步判定为 MATCH；        // - 类别冲突时优先选择“非 ID 类别”；
+
+        for (idx, state_set) in dfa_state_sets.iter().enumerate() {
+
+            let contains_match = state_set.iter().any(|state_id| {
+
+                self.pStateTable
+
+                    .get(*state_id as usize)
+
+                    .map(|s| s.StateType == "MATCH")
+
+                    .unwrap_or(false)
+
+            });
+
+
+
+            let mut match_type = if contains_match {
+
+                "MATCH".to_string()
+
+            } else {
+
+                "UNMATCH".to_string()
+
+            };
+
+            let category = if contains_match {
+
+                pick_preferred_category_from_ids(state_set.iter().copied(), &self.pStateTable)
+
+            } else {
+
+                None
+
+            };
+
+
+
+            if category.is_none() && match_type == "MATCH" {
+
+                match_type = "UNMATCH".to_string();
+
+            }
+
+
+
+            node_list.push(State {
+
+                stateId: idx as i32,
+
+                StateType: match_type,
+
+                LexemeCategory: category,
+
+            });
+
+        }
+
+
+
+        Graph {
+
+            graphId: next_graph_id(),
+
+            numOfStates: node_list.len() as i32,
+
+            pEdgeTable: edge_list,
+
+            pStateTable: node_list,
+
+        }
+
+    }
+
+
+
+    /// 对长文本进行 DFA 扫描
+
+    /// 将输入的长字符串通过当前 DFA 识别并解析出一系列的词法单元（Tokens）
+
+    pub fn long_text_search(&self, text: &str) -> Vec<Token> {
+
+        let mut result = Vec::new();
+
+        let mut next_state = 0;
+
+        let mut buffer = String::new();
+
+
+
+        for c in text.chars() {
+
+            let mut has_next = false;
+
+            for edge in &self.pEdgeTable {
+
+                if edge.fromState == next_state
+
+                    && edge.driverId != -1
+
+                    && has_contain_char(edge.driverId, c)
+
+                {
+
+                    next_state = edge.nextState;
+
+                    has_next = true;
+
+                    break;
+
+                }
+
+            }
+
+
+
+            if !has_next {
+
+                if let Some(token) = self.build_token(next_state, &buffer) {
+
+                    result.push(token);
+
+                }
+
+                buffer.clear();
+
+                buffer.push(c);
+
+                next_state = 0;
+
+                for edge in &self.pEdgeTable {
+
+                    if edge.fromState == next_state
+
+                        && edge.driverId != -1
+
+                        && has_contain_char(edge.driverId, c)
+
+                    {
+
+                        next_state = edge.nextState;
+
+                        break;
+
+                    }
+
+                }
+
+            } else {
+
+                buffer.push(c);
+
+            }
+
+        }
+
+
+
+        if let Some(token) = self.build_token(next_state, &buffer) {
+
+            result.push(token);
+
+        }
+
+
+
+        result
+
+    }
+
+    /// Get lexeme category for a given input.
+
+    pub fn get_lexeme_category(&self, text: &str) -> Option<LexemeCategory> {
+
+        let mut curr_state = 0;
+
+        for c in text.chars() {
+
+            let mut jumped = false;
+
+            for edge in &self.pEdgeTable {
+
+                if edge.fromState == curr_state
+
+                    && edge.driverId != -1
+
+                    && has_contain_char(edge.driverId, c)
+
+                {
+
+                    curr_state = edge.nextState;
+
+                    jumped = true;
+
+                    break;
+
+                }
+
+            }
+
+            if !jumped {
+
+                return None;
+
+            }
+
+        }
+
+        self.pStateTable[curr_state as usize].LexemeCategory.clone()
+
+    }
+
+
+
+    /// 根据当前状态生成 token
+
+    fn build_token(&self, state_idx: i32, buffer: &str) -> Option<Token> {
+
+        if state_idx < 0 || state_idx as usize >= self.pStateTable.len() {
+
+            return None;
+
+        }
+
+        let state = &self.pStateTable[state_idx as usize];
+
+        let category = state.LexemeCategory.clone()?;
+
+        if category == LexemeCategory::SPACE_CONST || category == LexemeCategory::NOTE {
+
+            return None;
+
+        }
+
+
+
+        let mut token = Token {
+
+            lexeme_category: category.clone(),
+
+            symbol_type: "TERMINAL".to_string(),
+
+            identify: None,
+
+            value: None,
+
+        };
+
+
+
+        // 依据类别填充 token 的附加字段：
+
+        if category == LexemeCategory::ID {
+
+            token.identify = Some(buffer.to_string());
+
+        } else if category == LexemeCategory::INTEGER_CONST {
+
+            token.value = buffer.parse::<i64>().ok();
+
+        } else if category == LexemeCategory::KEYWORD {
+
+            token.identify = Some(buffer.to_string());
+
+        }
+
+
 
         Some(token)
+
     }
+
 }
+
+
 
 /// 将 NFA 状态集合转化为 DFA 边与节点
+
 fn handle_state_transition(
+
     dfa_state_sets: &mut Vec<HashSet<i32>>,
+
     queue: &mut VecDeque<HashSet<i32>>,
+
     edge_list: &mut Vec<Edge>,
+
     curr_state_id: i32,
+
     driver_id: i32,
+
     driver_type: &str,
+
     next_state_set: HashSet<i32>,
+
 ) {
+
     if next_state_set.is_empty() {
+
         return;
+
     }
 
-    // 若 next_state_set 已存在，则只新增一条边指向已有 DFA 节点；
-    // 否则创建新 DFA 节点（通过 push 到 dfa_state_sets 并入队）。
     if let Some(pos) = dfa_state_sets.iter().position(|set| *set == next_state_set) {
+
         edge_list.push(Edge {
+
             fromState: curr_state_id,
+
             nextState: pos as i32,
+
             driverId: driver_id,
+
             DriverType: driver_type.to_string(),
+
         });
+
     } else {
+
         dfa_state_sets.push(next_state_set.clone());
+
         queue.push_back(next_state_set.clone());
+
         let new_id = (dfa_state_sets.len() - 1) as i32;
+
         edge_list.push(Edge {
+
             fromState: curr_state_id,
+
             nextState: new_id,
+
             driverId: driver_id,
+
             DriverType: driver_type.to_string(),
+
         });
+
     }
+
 }
 
-/// 为组合操作准备：整体平移图结构
+/// Shift state/edge ids by offset.
+
 fn shift_graph(graph: &mut Graph, offset: i32) {
+
     for state in &mut graph.pStateTable {
+
         state.stateId += offset;
+
     }
+
     for edge in &mut graph.pEdgeTable {
+
         edge.fromState += offset;
+
         edge.nextState += offset;
+
     }
+
 }
+
+
 
 /// 创建一个只有起止两状态的基础 NFA
+
+/// 构建一个基础 NFA: 例如单个字符或单个词汇的识别
+
 pub fn generateBasicNFA(
+
     driverType: &str,
+
     driverId: i32,
+
     category: Option<LexemeCategory>,
+
 ) -> Graph {
-    // 结构固定：
-    //   state 0(UNMATCH) --driver--> state 1(MATCH, category)
-    // 所有复杂正则都由该最小单元经 union/product/closure 组合而成。
+
+    // 结构固定：    //   state 0(UNMATCH) --driver--> state 1(MATCH, category)
+
     let mut graph = Graph::new(2);
+
     graph.pStateTable.push(State {
+
         stateId: 0,
+
         StateType: "UNMATCH".to_string(),
+
         LexemeCategory: None,
+
     });
+
     graph.pStateTable.push(State {
+
         stateId: 1,
+
         StateType: "MATCH".to_string(),
+
         LexemeCategory: category,
+
     });
+
     graph.pEdgeTable.push(Edge {
+
         fromState: 0,
+
         nextState: 1,
+
         driverId,
+
         DriverType: driverType.to_string(),
+
     });
+
     graph
+
 }
 
-/// 构造两个图的并集，增加新起止
+/// Union of two NFAs.
+
 pub fn union(mut g1: Graph, mut g2: Graph) -> Graph {
+
     let g1_count = g1.pStateTable.len() as i32;
+
     shift_graph(&mut g1, 1);
+
     shift_graph(&mut g2, 1 + g1_count);
+
     let g2_start_id = 1 + g1_count;
 
+
+
     let mut states = Vec::new();
+
     states.push(State {
+
         stateId: 0,
+
         StateType: "UNMATCH".to_string(),
+
         LexemeCategory: None,
+
     });
+
     states.extend(g1.pStateTable.clone());
+
     states.extend(g2.pStateTable.clone());
+
     let accept_id = states.len() as i32;
+
     states.push(State {
+
         stateId: accept_id,
+
         StateType: "MATCH".to_string(),
+
         LexemeCategory: None,
+
     });
+
+
 
     let mut edges = Vec::new();
+
     edges.extend(g1.pEdgeTable.clone());
+
     edges.extend(g2.pEdgeTable.clone());
+
     edges.push(Edge {
+
         fromState: 0,
+
         nextState: 1,
+
         driverId: -1,
+
         DriverType: "NULL".to_string(),
+
     });
+
     edges.push(Edge {
+
         fromState: 0,
+
         nextState: g2_start_id,
+
         driverId: -1,
+
         DriverType: "NULL".to_string(),
+
     });
+
+
 
     let mut match_ids = Vec::new();
+
     for state in states.iter() {
+
         if state.stateId != 0 && state.stateId != accept_id && state.StateType == "MATCH" {
+
             match_ids.push(state.stateId);
+
         }
+
     }
+
     for id in match_ids.iter() {
+
         edges.push(Edge {
+
             fromState: *id,
+
             nextState: accept_id,
+
             driverId: -1,
+
             DriverType: "NULL".to_string(),
+
         });
+
     }
+
     for state in states.iter_mut() {
+
         if match_ids.contains(&state.stateId) {
+
             state.StateType = "UNMATCH".to_string();
+
         }
+
     }
+
+
 
     Graph {
+
         graphId: next_graph_id(),
+
         numOfStates: states.len() as i32,
+
         pEdgeTable: edges,
+
         pStateTable: states,
+
     }
+
 }
 
-/// 图的串联：将 g1 的终态指向 g2 的始态
+/// Concatenate two NFAs.
+
 pub fn product(g1: Graph, mut g2: Graph) -> Graph {
+
     let g1_count = g1.pStateTable.len() as i32;
+
     shift_graph(&mut g2, g1_count);
+
     let g2_start_id = g1_count;
 
+
+
     let mut states = g1.pStateTable.clone();
+
     states.extend(g2.pStateTable.clone());
 
+
+
     let mut edges = g1.pEdgeTable.clone();
+
     edges.extend(g2.pEdgeTable.clone());
 
+
+
     for state in states.iter_mut() {
+
         if state.stateId < g2_start_id && state.StateType == "MATCH" {
+
             state.StateType = "UNMATCH".to_string();
+
             state.LexemeCategory = None;
+
             edges.push(Edge {
+
                 fromState: state.stateId,
+
                 nextState: g2_start_id,
+
                 driverId: -1,
+
                 DriverType: "NULL".to_string(),
+
             });
+
         }
+
+    }
+
+
+
+    Graph {
+
+        graphId: next_graph_id(),
+
+        numOfStates: states.len() as i32,
+
+        pEdgeTable: edges,
+
+        pStateTable: states,
+
+    }
+
+}
+
+/// One-or-more closure.
+
+pub fn plusClosure(mut g: Graph) -> Graph {
+
+    let start_id = g.pStateTable.first().map(|s| s.stateId).unwrap_or(0);
+
+    let match_ids: Vec<i32> = g
+
+        .pStateTable
+
+        .iter()
+
+        .filter(|s| s.StateType == "MATCH")
+
+        .map(|s| s.stateId)
+
+        .collect();
+
+    for id in match_ids {
+
+        g.pEdgeTable.push(Edge {
+
+            fromState: id,
+
+            nextState: start_id,
+
+            driverId: -1,
+
+            DriverType: "NULL".to_string(),
+
+        });
+
+    }
+
+    g.graphId = next_graph_id();
+
+    g.numOfStates = g.pStateTable.len() as i32;
+
+    g
+
+}
+
+
+
+fn add_epsilon_edge(edges: &mut Vec<Edge>, from_state: i32, to_state: i32) {
+
+    edges.push(Edge {
+
+        fromState: from_state,
+
+        nextState: to_state,
+
+        driverId: -1,
+
+        DriverType: "NULL".to_string(),
+
+    });
+
+}
+
+fn has_incoming_edge(edges: &[Edge], state_id: i32) -> bool {
+
+    edges
+
+        .iter()
+
+        .any(|edge| edge.nextState == state_id && edge.fromState != state_id)
+
+}
+
+fn has_outgoing_edge(edges: &[Edge], state_id: i32) -> bool {
+
+    edges.iter().any(|edge| edge.fromState == state_id)
+
+}
+
+fn closure_conservative(mut g: Graph) -> Graph {
+
+    shift_graph(&mut g, 1);
+
+    let mut states = Vec::new();
+
+    states.push(State {
+
+        stateId: 0,
+
+        StateType: "UNMATCH".to_string(),
+
+        LexemeCategory: None,
+
+    });
+
+    states.extend(g.pStateTable.clone());
+
+    let accept_id = states.len() as i32;
+
+    states.push(State {
+
+        stateId: accept_id,
+
+        StateType: "MATCH".to_string(),
+
+        LexemeCategory: None,
+
+    });
+
+    let mut edges = g.pEdgeTable.clone();
+
+    add_epsilon_edge(&mut edges, 0, 1);
+
+    add_epsilon_edge(&mut edges, 0, accept_id);
+
+    let match_ids: Vec<i32> = states
+
+        .iter()
+
+        .filter(|s| s.stateId != 0 && s.stateId != accept_id && s.StateType == "MATCH")
+
+        .map(|s| s.stateId)
+
+        .collect();
+
+    for id in &match_ids {
+
+        add_epsilon_edge(&mut edges, *id, 1);
+
+        add_epsilon_edge(&mut edges, *id, accept_id);
+
+    }
+
+    for state in states.iter_mut() {
+
+        if match_ids.contains(&state.stateId) {
+
+            state.StateType = "UNMATCH".to_string();
+
+        }
+
     }
 
     Graph {
+
         graphId: next_graph_id(),
+
         numOfStates: states.len() as i32,
+
         pEdgeTable: edges,
+
         pStateTable: states,
+
     }
+
 }
 
-/// 正闭包：至少一次
-pub fn plusClosure(mut g: Graph) -> Graph {
-    let start_id = g.pStateTable.first().map(|s| s.stateId).unwrap_or(0);
-    let match_ids: Vec<i32> = g
-        .pStateTable
-        .iter()
-        .filter(|s| s.StateType == "MATCH")
-        .map(|s| s.stateId)
-        .collect();
-    for id in match_ids {
-        g.pEdgeTable.push(Edge {
-            fromState: id,
-            nextState: start_id,
-            driverId: -1,
-            DriverType: "NULL".to_string(),
-        });
-    }
-    g.graphId = next_graph_id();
-    g.numOfStates = g.pStateTable.len() as i32;
-    g
-}
+
 
 /// Kleene 闭包：零次或多次
-pub fn closure(mut g: Graph) -> Graph {
-    shift_graph(&mut g, 1);
-    let mut states = Vec::new();
-    states.push(State {
-        stateId: 0,
-        StateType: "UNMATCH".to_string(),
-        LexemeCategory: None,
-    });
-    states.extend(g.pStateTable.clone());
-    let accept_id = states.len() as i32;
-    states.push(State {
-        stateId: accept_id,
-        StateType: "MATCH".to_string(),
-        LexemeCategory: None,
-    });
+
+pub fn closure(g: Graph) -> Graph {
+
+    if g.pStateTable.is_empty() {
+
+        return g;
+
+    }
+
+    let start_id = g.pStateTable.first().map(|s| s.stateId).unwrap_or(0);
+
+    let match_ids: Vec<i32> = g
+
+        .pStateTable
+
+        .iter()
+
+        .filter(|s| s.StateType == "MATCH")
+
+        .map(|s| s.stateId)
+
+        .collect();
+
+    // 图 2.16：判断复用起始状态
+
+    if match_ids.len() != 1 {
+
+        return closure_conservative(g);
+
+    }
+
+    let old_accept = match_ids[0];
+
+    let start_has_in = has_incoming_edge(&g.pEdgeTable, start_id);
+
+    let accept_has_out = has_outgoing_edge(&g.pEdgeTable, old_accept);
+
+    // 情况 1：入度 + 出度 -> 保守处理
+
+    if start_has_in && accept_has_out {
+
+        return closure_conservative(g);
+
+    }
+
+    // 情况 2：入度无出度 -> 平移处理
+
+    if start_has_in && !accept_has_out {
+
+        let mut shifted = g;
+
+        shift_graph(&mut shifted, 1);
+
+        let shifted_start = start_id + 1;
+
+        let shifted_accept = old_accept + 1;
+
+        let mut states = Vec::new();
+
+        states.push(State {
+
+            stateId: 0,
+
+            StateType: "UNMATCH".to_string(),
+
+            LexemeCategory: None,
+
+        });
+
+        states.extend(shifted.pStateTable.clone());
+
+        let mut edges = shifted.pEdgeTable.clone();
+
+        add_epsilon_edge(&mut edges, 0, shifted_start);
+
+        add_epsilon_edge(&mut edges, 0, shifted_accept);
+
+        add_epsilon_edge(&mut edges, shifted_accept, shifted_start);
+
+        return Graph {
+
+            graphId: next_graph_id(),
+
+            numOfStates: states.len() as i32,
+
+            pEdgeTable: edges,
+
+            pStateTable: states,
+
+        };
+
+    }
+
+    // 情况 3：出度无入度 -> 新建处理
+
+    if !start_has_in && accept_has_out {
+
+        let mut states = g.pStateTable.clone();
+
+        for state in states.iter_mut() {
+
+            if state.stateId == old_accept {
+
+                state.StateType = "UNMATCH".to_string();
+
+            }
+
+        }
+
+        let new_accept = states.iter().map(|state| state.stateId).max().unwrap_or(-1) + 1;
+
+        states.push(State {
+
+            stateId: new_accept,
+
+            StateType: "MATCH".to_string(),
+
+            LexemeCategory: None,
+
+        });
+
+        let mut edges = g.pEdgeTable.clone();
+
+        add_epsilon_edge(&mut edges, start_id, new_accept);
+
+        add_epsilon_edge(&mut edges, old_accept, start_id);
+
+        add_epsilon_edge(&mut edges, old_accept, new_accept);
+
+        return Graph {
+
+            graphId: next_graph_id(),
+
+            numOfStates: states.len() as i32,
+
+            pEdgeTable: edges,
+
+            pStateTable: states,
+
+        };
+
+    }
+
+    // 情况 4：无出度无入度 -> 直接连接处理
+
+    let states = g.pStateTable.clone();
 
     let mut edges = g.pEdgeTable.clone();
-    edges.push(Edge {
-        fromState: 0,
-        nextState: 1,
-        driverId: -1,
-        DriverType: "NULL".to_string(),
-    });
-    edges.push(Edge {
-        fromState: 0,
-        nextState: accept_id,
-        driverId: -1,
-        DriverType: "NULL".to_string(),
-    });
 
-    let match_ids: Vec<i32> = states
-        .iter()
-        .filter(|s| s.stateId != 0 && s.stateId != accept_id && s.StateType == "MATCH")
-        .map(|s| s.stateId)
-        .collect();
-    for id in &match_ids {
-        edges.push(Edge {
-            fromState: *id,
-            nextState: 1,
-            driverId: -1,
-            DriverType: "NULL".to_string(),
-        });
-        edges.push(Edge {
-            fromState: *id,
-            nextState: accept_id,
-            driverId: -1,
-            DriverType: "NULL".to_string(),
-        });
-    }
-    for state in states.iter_mut() {
-        if match_ids.contains(&state.stateId) {
-            state.StateType = "UNMATCH".to_string();
-        }
-    }
+    add_epsilon_edge(&mut edges, start_id, old_accept);
+
+    add_epsilon_edge(&mut edges, old_accept, start_id);
 
     Graph {
+
         graphId: next_graph_id(),
+
         numOfStates: states.len() as i32,
+
         pEdgeTable: edges,
+
         pStateTable: states,
+
     }
+
 }
 
-/// 可选：零次或一次
+/// Zero-or-one operator.
+
 pub fn zeroOrOne(mut g: Graph) -> Graph {
+
     shift_graph(&mut g, 1);
+
     let mut states = Vec::new();
+
     states.push(State {
+
         stateId: 0,
+
         StateType: "UNMATCH".to_string(),
+
         LexemeCategory: None,
+
     });
+
     states.extend(g.pStateTable.clone());
+
     let accept_id = states.len() as i32;
+
     states.push(State {
+
         stateId: accept_id,
+
         StateType: "MATCH".to_string(),
+
         LexemeCategory: None,
+
     });
+
+
 
     let mut edges = g.pEdgeTable.clone();
+
     edges.push(Edge {
+
         fromState: 0,
+
         nextState: 1,
+
         driverId: -1,
+
         DriverType: "NULL".to_string(),
+
     });
+
     edges.push(Edge {
+
         fromState: 0,
+
         nextState: accept_id,
+
         driverId: -1,
+
         DriverType: "NULL".to_string(),
+
     });
+
+
 
     let match_ids: Vec<i32> = states
+
         .iter()
+
         .filter(|s| s.stateId != 0 && s.stateId != accept_id && s.StateType == "MATCH")
+
         .map(|s| s.stateId)
+
         .collect();
+
     for id in &match_ids {
+
         edges.push(Edge {
+
             fromState: *id,
+
             nextState: accept_id,
+
             driverId: -1,
+
             DriverType: "NULL".to_string(),
+
         });
-    }
-    for state in states.iter_mut() {
-        if match_ids.contains(&state.stateId) {
-            state.StateType = "UNMATCH".to_string();
-        }
+
     }
 
-    Graph {
-        graphId: next_graph_id(),
-        numOfStates: states.len() as i32,
-        pEdgeTable: edges,
-        pStateTable: states,
+    for state in states.iter_mut() {
+
+        if match_ids.contains(&state.stateId) {
+
+            state.StateType = "UNMATCH".to_string();
+
+        }
+
     }
+
+
+
+    Graph {
+
+        graphId: next_graph_id(),
+
+        numOfStates: states.len() as i32,
+
+        pEdgeTable: edges,
+
+        pStateTable: states,
+
+    }
+
 }
+

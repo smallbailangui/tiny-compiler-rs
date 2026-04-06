@@ -1,8 +1,8 @@
-#![allow(non_snake_case)]
+﻿#![allow(non_snake_case)]
 #![allow(unused_imports)]
 
-pub mod char_set;
 pub mod category;
+pub mod char_set;
 pub mod edge;
 pub mod graph;
 pub mod regular_expression;
@@ -11,17 +11,14 @@ pub mod token;
 
 pub use category::LexemeCategory;
 pub use char_set::{
-    difference_charset_char,
-    difference_charsets,
-    range,
-    show_char_set_table,
-    union_chars,
-    union_charsets,
-    union_charset_char,
+    difference_charset_char, difference_charsets, range, show_char_set_table, union_chars,
+    union_charset_char, union_charsets,
 };
 pub use edge::Edge;
-pub use graph::{closure, generateBasicNFA, plusClosure, product, union, zeroOrOne, Graph};
-pub use regular_expression::{add_regular_expression, clear_regular_table, regular_table_snapshot, RegularExpression};
+pub use graph::{Graph, closure, generateBasicNFA, plusClosure, product, union, zeroOrOne};
+pub use regular_expression::{
+    RegularExpression, add_regular_expression, clear_regular_table, regular_table_snapshot,
+};
 pub use state::State;
 pub use token::Token;
 
@@ -30,15 +27,16 @@ use graph::reset_graph_counter;
 
 /// 构建 TINY 语言词法 DFA。
 ///
-/// 总体流程：
-/// 1) 先定义基础字符集（字母、数字、各种符号）；
-/// 2) 分别构建关键字/运算符/标识符/注释/数字/空白的 NFA；
-/// 3) 通过多次 `union` 合并成总 NFA；
-/// 4) 使用子集构造法 `NFA_to_DFA` 得到最终 DFA。
+/// 总体步骤：
+/// 1. 定义基础字符集。
+/// 2. 构建关键字、运算符、标识符、注释、数字、空白等 NFA。
+/// 3. 通过 `union_many` 合并为总 NFA。
+/// 4. 最简化 NFA 后，再做子集构造得到 DFA。
 pub fn create_tiny_lexical_dfa() -> Graph {
+    // 每次构建前先清理全局表，避免脏数据影响。
     reset_global_tables();
 
-    // 基础字符集合
+    // 基础字符集。
     let lower = range('a', 'z');
     let upper = range('A', 'Z');
     let digit = range('0', '9');
@@ -46,8 +44,7 @@ pub fn create_tiny_lexical_dfa() -> Graph {
     let letter_digit = union_charsets(letters, digit);
     let single_letters = create_single_letter_sets();
 
-    // 运算符和分隔符字符集：
-    // 每个字符都对应一个最小字符集（单点区间），后续作为边驱动 id 使用。
+    // 运算符/分隔符字符集。
     let char_set_add = range('+', '+');
     let char_set_sub = range('-', '-');
     let char_set_mul = range('*', '*');
@@ -62,8 +59,7 @@ pub fn create_tiny_lexical_dfa() -> Graph {
     let char_set_left_note = range('{', '{');
     let char_set_right_note = range('}', '}');
 
-    // 注释内部允许的字符集合：
-    // 这里采用“白名单并集”策略，允许字母、数字及常见符号，避免把右花括号提前吞掉。
+    // 注释内容允许字符池（不包含右花括号，避免提前吞掉结束符）。
     let mut note_pool = letters;
     for extra in [
         char_set_add,
@@ -82,8 +78,7 @@ pub fn create_tiny_lexical_dfa() -> Graph {
     }
     let note_char_set = union_charsets(note_pool, letter_digit);
 
-    // 关键字 NFA：
-    // 每个关键字都被构建成一条串联路径，末态类别为 KEYWORD。
+    // 关键字 NFA。
     let keyword_graph = union_many(vec![
         build_keyword_graph("if", &single_letters),
         build_keyword_graph("then", &single_letters),
@@ -95,34 +90,59 @@ pub fn create_tiny_lexical_dfa() -> Graph {
         build_keyword_graph("write", &single_letters),
     ]);
 
-    // 运算符与界符 NFA：
-    // 注意 `:=` 通过两段 NFA 串联实现，其中 `:` 为中间态，`=` 落在接受态。
+    // 运算符与界符 NFA（`:=` 用串联实现）。
     let graph_assign = product(
         generateBasicNFA("CHAR", char_set_colon, None),
-        generateBasicNFA("CHAR", char_set_equal, Some(LexemeCategory::ASSIGN_OPERATOR)),
+        generateBasicNFA(
+            "CHAR",
+            char_set_equal,
+            Some(LexemeCategory::ASSIGN_OPERATOR),
+        ),
     );
     let operator_graph = union_many(vec![
         generateBasicNFA("CHAR", char_set_add, Some(LexemeCategory::NUMERIC_OPERATOR)),
         generateBasicNFA("CHAR", char_set_sub, Some(LexemeCategory::NUMERIC_OPERATOR)),
         generateBasicNFA("CHAR", char_set_mul, Some(LexemeCategory::NUMERIC_OPERATOR)),
         generateBasicNFA("CHAR", char_set_div, Some(LexemeCategory::NUMERIC_OPERATOR)),
-        generateBasicNFA("CHAR", char_set_equal, Some(LexemeCategory::COMPARE_OPERATOR)),
-        generateBasicNFA("CHAR", char_set_less, Some(LexemeCategory::COMPARE_OPERATOR)),
-        generateBasicNFA("CHAR", char_set_left_paren, Some(LexemeCategory::LOGIC_OPERATOR)),
-        generateBasicNFA("CHAR", char_set_right_paren, Some(LexemeCategory::LOGIC_OPERATOR)),
-        generateBasicNFA("CHAR", char_set_semicolon, Some(LexemeCategory::LOGIC_OPERATOR)),
+        generateBasicNFA(
+            "CHAR",
+            char_set_equal,
+            Some(LexemeCategory::COMPARE_OPERATOR),
+        ),
+        generateBasicNFA(
+            "CHAR",
+            char_set_less,
+            Some(LexemeCategory::COMPARE_OPERATOR),
+        ),
+        generateBasicNFA(
+            "CHAR",
+            char_set_left_paren,
+            Some(LexemeCategory::LOGIC_OPERATOR),
+        ),
+        generateBasicNFA(
+            "CHAR",
+            char_set_right_paren,
+            Some(LexemeCategory::LOGIC_OPERATOR),
+        ),
+        generateBasicNFA(
+            "CHAR",
+            char_set_semicolon,
+            Some(LexemeCategory::LOGIC_OPERATOR),
+        ),
         graph_assign,
     ]);
 
-    // 标识符规则：letter (letter|digit)*
-    // 第一段必须是字母，第二段使用闭包表示“零个或多个字母数字”。
+    // 标识符：letter (letter|digit)*
     let graph_identifier = product(
         generateBasicNFA("CHARSET", letters, None),
-        closure(generateBasicNFA("CHARSET", letter_digit, Some(LexemeCategory::ID))),
+        closure(generateBasicNFA(
+            "CHARSET",
+            letter_digit,
+            Some(LexemeCategory::ID),
+        )),
     );
 
-    // 注释规则：{ ... }
-    // 使用左花括号 + 内容闭包 + 右花括号三段串联。
+    // 注释：{ ... }
     let graph_note = product(
         product(
             generateBasicNFA("CHAR", char_set_left_note, None),
@@ -131,8 +151,7 @@ pub fn create_tiny_lexical_dfa() -> Graph {
         generateBasicNFA("CHAR", char_set_right_note, Some(LexemeCategory::NOTE)),
     );
 
-    // 数字与空白：
-    // 当前数字先实现整数路径（至少 1 位），浮点/科学计数法后续可扩展。
+    // 数字（当前仅整数）与空白。
     let graph_number = plusClosure(generateBasicNFA(
         "CHARSET",
         digit,
@@ -149,37 +168,42 @@ pub fn create_tiny_lexical_dfa() -> Graph {
         graph_blank,
     ]);
 
-    lexical_graph.NFA_to_DFA()
+    lexical_graph.minimize_nfa().NFA_to_DFA()
 }
 
+/// 重置词法构造使用到的所有全局表。
 pub fn reset_global_tables() {
-    // 每次重建自动机前都重置全局表，避免上次构建遗留状态影响本次结果。
     reset_char_sets();
     reset_graph_counter();
     clear_regular_table();
 }
 
+/// 构建 `a..z` 的单字符字符集列表。
 fn create_single_letter_sets() -> Vec<i32> {
     ('a'..='z').map(|ch| range(ch, ch)).collect()
 }
 
+/// 把小写字母映射到 `single_letters` 中对应的字符集 id。
 fn char_set_for(single_letters: &[i32], ch: char) -> i32 {
-    // `single_letters` 按 a..z 顺序创建，这里通过偏移 O(1) 定位。
     let idx = (ch as u8 - b'a') as usize;
     single_letters[idx]
 }
 
+/// 把一个关键字构造成串联 NFA。
 fn build_keyword_graph(word: &str, single_letters: &[i32]) -> Graph {
-    // 关键字构图策略：
-    //   first_char --product--> second_char --product--> ... --last_char(KEYWORD)
-    // 只有最后一段边到达的状态才携带 KEYWORD 类别。
     let chars: Vec<char> = word.chars().collect();
     let first = *chars.first().expect("keyword 不能为空");
+
+    // 先用首字符建立初始 NFA。
     let mut graph = generateBasicNFA("CHAR", char_set_for(single_letters, first), None);
+
+    // 单字母关键字特殊处理：直接标记终态类别。
     if chars.len() == 1 {
         graph.pStateTable.last_mut().unwrap().LexemeCategory = Some(LexemeCategory::KEYWORD);
         return graph;
     }
+
+    // 其余字符依次串联，最后一个字符落在 KEYWORD 终态。
     for (index, ch) in chars.iter().enumerate().skip(1) {
         let is_last = index == chars.len() - 1;
         let category = if is_last {
@@ -187,11 +211,16 @@ fn build_keyword_graph(word: &str, single_letters: &[i32]) -> Graph {
         } else {
             None
         };
-        graph = product(graph, generateBasicNFA("CHAR", char_set_for(single_letters, *ch), category));
+        graph = product(
+            graph,
+            generateBasicNFA("CHAR", char_set_for(single_letters, *ch), category),
+        );
     }
+
     graph
 }
 
+/// 将多个图按顺序做并运算。
 fn union_many(graphs: Vec<Graph>) -> Graph {
     let mut iter = graphs.into_iter();
     let mut acc = iter.next().expect("union_many 至少需要一个图");
@@ -200,3 +229,4 @@ fn union_many(graphs: Vec<Graph>) -> Graph {
     }
     acc
 }
+
