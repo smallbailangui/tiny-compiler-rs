@@ -294,7 +294,15 @@ impl Graph {
 
     /// 经过精简和优化的 NFA，去除不必要的冗余状态和空跳边
 
-    pub fn minimize_nfa(&self) -> Graph {
+    /// 调度对 NFA 的全面最小化优化，包括消除 ε-边、修剪无用状态及合并等价状态。
+///
+/// Returns:
+///   最小化后的 NFA 图。
+/// 调度对 NFA 的全面最小化优化，包括消除 ε-边、修剪无用状态及合并等价状态。
+///
+/// Returns:
+///   最小化后的 NFA 图。
+pub fn minimize_nfa(&self) -> Graph {
 
         let epsilon_free = self.build_epsilon_free_nfa();
 
@@ -308,7 +316,15 @@ impl Graph {
 
 
 
-    fn build_epsilon_free_nfa(&self) -> Graph {
+    /// 将带有 ε-边的 NFA 转换为不带 ε-边的 NFA，消除空跳状态。
+///
+/// Returns:
+///   消除 ε-边后的图。
+/// 将带有 ε-边的 NFA 转换为不带 ε-边的 NFA，消除空跳状态。
+///
+/// Returns:
+///   消除 ε-边后的图。
+fn build_epsilon_free_nfa(&self) -> Graph {
 
         let state_count = self.pStateTable.len();
 
@@ -618,7 +634,15 @@ impl Graph {
 
 
 
-    fn prune_useless_states(&self) -> Graph {
+    /// 裁剪自动机中的不可达状态和死状态，提升效率。
+///
+/// Returns:
+///   裁剪无用状态后的图。
+/// 裁剪自动机中的不可达状态和死状态，提升效率。
+///
+/// Returns:
+///   裁剪无用状态后的图。
+fn prune_useless_states(&self) -> Graph {
 
         if self.pStateTable.is_empty() {
 
@@ -738,7 +762,15 @@ impl Graph {
 
 
 
-    fn merge_equivalent_states(&self) -> Graph {
+    /// 查找并合并图中行为等价的状态（相同输入、相同输出），最小化状态数。
+///
+/// Returns:
+///   合并等价状态后的图。
+/// 查找并合并图中行为等价的状态（相同输入、相同输出），最小化状态数。
+///
+/// Returns:
+///   合并等价状态后的图。
+fn merge_equivalent_states(&self) -> Graph {
 
         if self.pStateTable.len() <= 1 {
 
@@ -972,7 +1004,23 @@ impl Graph {
 
 
 
-    pub fn move_by_driver(&self, curr: &HashSet<i32>, driver_id: i32) -> HashSet<i32> {
+    /// 根据指定的 driverId 在当前状态集合上进行状态转移（move）。
+///
+/// Args:
+///   curr: 当前状态集合。
+///   driver_id: 驱动 ID。
+///
+/// Returns:
+///   转移后的状态集合。
+/// 根据指定的 driverId 在当前状态集合上进行状态转移（move）。
+///
+/// Args:
+///   curr: 当前状态集合。
+///   driver_id: 驱动 ID。
+///
+/// Returns:
+///   转移后的状态集合。
+pub fn move_by_driver(&self, curr: &HashSet<i32>, driver_id: i32) -> HashSet<i32> {
 
         let mut result = HashSet::new();
 
@@ -992,7 +1040,23 @@ impl Graph {
 
     /// Move by concrete character on CHAR/CHARSET edges.
 
-    pub fn move_by_char(&self, curr: &HashSet<i32>, c: char) -> HashSet<i32> {
+    /// 根据指定的字符在当前状态集合上进行状态转移（move）。
+///
+/// Args:
+///   curr: 当前状态集合。
+///   c: 输入的字符。
+///
+/// Returns:
+///   转移后的状态集合。
+/// 根据指定的字符在当前状态集合上进行状态转移（move）。
+///
+/// Args:
+///   curr: 当前状态集合。
+///   c: 输入的字符。
+///
+/// Returns:
+///   转移后的状态集合。
+pub fn move_by_char(&self, curr: &HashSet<i32>, c: char) -> HashSet<i32> {
 
         let mut result = HashSet::new();
 
@@ -1016,7 +1080,21 @@ impl Graph {
 
     /// 计算 epsilon 闭包
 
-    pub fn epsilon_closure(&self, curr: &HashSet<i32>) -> HashSet<i32> {
+    /// 计算指定状态集合的 ε-闭包（所有通过 ε-边可达的状态）。
+///
+/// Args:
+///   curr: 初始状态集合。
+///
+/// Returns:
+///   包含 ε-闭包的状态集合。
+/// 计算指定状态集合的 ε-闭包（所有通过 ε-边可达的状态）。
+///
+/// Args:
+///   curr: 初始状态集合。
+///
+/// Returns:
+///   包含 ε-闭包的状态集合。
+pub fn epsilon_closure(&self, curr: &HashSet<i32>) -> HashSet<i32> {
 
         let mut result = curr.clone();
 
@@ -1048,7 +1126,23 @@ impl Graph {
 
     /// DTran 封装：在指定 driver 上 move + epsilon
 
-    pub fn DTran_driver(&self, curr: &HashSet<i32>, driver_id: i32) -> HashSet<i32> {
+    /// 封装 DTran 逻辑：组合 move_by_driver 和 epsilon_closure。
+///
+/// Args:
+///   curr: 当前状态集合。
+///   driver_id: 驱动 ID。
+///
+/// Returns:
+///   转移后并应用 ε-闭包的状态集合。
+/// 封装 DTran 逻辑：组合 move_by_driver 和 epsilon_closure。
+///
+/// Args:
+///   curr: 当前状态集合。
+///   driver_id: 驱动 ID。
+///
+/// Returns:
+///   转移后并应用 ε-闭包的状态集合。
+pub fn DTran_driver(&self, curr: &HashSet<i32>, driver_id: i32) -> HashSet<i32> {
 
         let moved = self.move_by_driver(curr, driver_id);
 
@@ -1060,7 +1154,23 @@ impl Graph {
 
     /// DTran 封装：用字符驱动 move + epsilon
 
-    pub fn DTran_char(&self, curr: &HashSet<i32>, c: char) -> HashSet<i32> {
+    /// 封装 DTran 逻辑：组合 move_by_char 和 epsilon_closure。
+///
+/// Args:
+///   curr: 当前状态集合。
+///   c: 输入的字符。
+///
+/// Returns:
+///   转移后并应用 ε-闭包的状态集合。
+/// 封装 DTran 逻辑：组合 move_by_char 和 epsilon_closure。
+///
+/// Args:
+///   curr: 当前状态集合。
+///   c: 输入的字符。
+///
+/// Returns:
+///   转移后并应用 ε-闭包的状态集合。
+pub fn DTran_char(&self, curr: &HashSet<i32>, c: char) -> HashSet<i32> {
 
         let moved = self.move_by_char(curr, c);
 
@@ -1076,7 +1186,15 @@ impl Graph {
 
     /// 使用的是经典的子集构造法 (Subset Construction Algorithm)
 
-    pub fn NFA_to_DFA(&self) -> Graph {
+    /// 使用子集构造法将当前的 NFA 转换为 DFA。
+///
+/// Returns:
+///   转换后的 DFA 图。
+/// 使用子集构造法将当前的 NFA 转换为 DFA。
+///
+/// Returns:
+///   转换后的 DFA 图。
+pub fn NFA_to_DFA(&self) -> Graph {
 
         let mut node_list = Vec::new();
 
@@ -1470,6 +1588,11 @@ impl Graph {
 
             token.identify = Some(buffer.to_string());
 
+        } else if category == LexemeCategory::COMPARE_OPERATOR 
+               || category == LexemeCategory::LOGIC_OPERATOR 
+               || category == LexemeCategory::NUMERIC_OPERATOR 
+               || category == LexemeCategory::ASSIGN_OPERATOR {
+            token.identify = Some(buffer.to_string());
         }
 
 
@@ -1572,6 +1695,24 @@ fn shift_graph(graph: &mut Graph, offset: i32) {
 
 /// 构建一个基础 NFA: 例如单个字符或单个词汇的识别
 
+/// 创建一个基础的 NFA（通常用于匹配单个字符或字符集）。
+///
+/// Args:
+///   driverType: 驱动类型（如 CHAR 或 CHARSET）。
+///   driverId: 驱动 ID（字符集 ID 或字符 Unicode 值）。
+///   category: 可选的词法类别。
+///
+/// Returns:
+///   构建的基础 NFA 图。
+/// 创建一个基础的 NFA（通常用于匹配单个字符或字符集）。
+///
+/// Args:
+///   driverType: 驱动类型（如 CHAR 或 CHARSET）。
+///   driverId: 驱动 ID（字符集 ID 或字符 Unicode 值）。
+///   category: 可选的词法类别。
+///
+/// Returns:
+///   构建的基础 NFA 图。
 pub fn generateBasicNFA(
 
     driverType: &str,
@@ -1624,6 +1765,22 @@ pub fn generateBasicNFA(
 
 /// Union of two NFAs.
 
+/// 对两个 NFA 进行并集（|）运算。
+///
+/// Args:
+///   g1: 第一个 NFA。
+///   g2: 第二个 NFA。
+///
+/// Returns:
+///   进行并集运算后的新 NFA。
+/// 对两个 NFA 进行并集（|）运算。
+///
+/// Args:
+///   g1: 第一个 NFA。
+///   g2: 第二个 NFA。
+///
+/// Returns:
+///   进行并集运算后的新 NFA。
 pub fn union(mut g1: Graph, mut g2: Graph) -> Graph {
 
     let g1_count = g1.pStateTable.len() as i32;
@@ -1754,6 +1911,22 @@ pub fn union(mut g1: Graph, mut g2: Graph) -> Graph {
 
 /// Concatenate two NFAs.
 
+/// 对两个 NFA 进行连接（串联）运算。
+///
+/// Args:
+///   g1: 第一个 NFA。
+///   g2: 第二个 NFA。
+///
+/// Returns:
+///   进行连接运算后的新 NFA。
+/// 对两个 NFA 进行连接（串联）运算。
+///
+/// Args:
+///   g1: 第一个 NFA。
+///   g2: 第二个 NFA。
+///
+/// Returns:
+///   进行连接运算后的新 NFA。
 pub fn product(g1: Graph, mut g2: Graph) -> Graph {
 
     let g1_count = g1.pStateTable.len() as i32;
@@ -1818,6 +1991,20 @@ pub fn product(g1: Graph, mut g2: Graph) -> Graph {
 
 /// One-or-more closure.
 
+/// 对 NFA 进行正闭包（+，匹配一次或多次）运算。
+///
+/// Args:
+///   g: 目标 NFA。
+///
+/// Returns:
+///   进行正闭包运算后的新 NFA。
+/// 对 NFA 进行正闭包（+，匹配一次或多次）运算。
+///
+/// Args:
+///   g: 目标 NFA。
+///
+/// Returns:
+///   进行正闭包运算后的新 NFA。
 pub fn plusClosure(mut g: Graph) -> Graph {
 
     let start_id = g.pStateTable.first().map(|s| s.stateId).unwrap_or(0);
@@ -1876,6 +2063,22 @@ fn add_epsilon_edge(edges: &mut Vec<Edge>, from_state: i32, to_state: i32) {
 
 }
 
+/// 检查指定的节点是否存在入边。
+///
+/// Args:
+///   edges: 图的所有边集合。
+///   state_id: 目标状态 ID。
+///
+/// Returns:
+///   如果存在入边返回 true，否则返回 false。
+/// 检查指定的节点是否存在入边。
+///
+/// Args:
+///   edges: 图的所有边集合。
+///   state_id: 目标状态 ID。
+///
+/// Returns:
+///   如果存在入边返回 true，否则返回 false。
 fn has_incoming_edge(edges: &[Edge], state_id: i32) -> bool {
 
     edges
@@ -1886,12 +2089,42 @@ fn has_incoming_edge(edges: &[Edge], state_id: i32) -> bool {
 
 }
 
+/// 检查指定的节点是否存在出边。
+///
+/// Args:
+///   edges: 图的所有边集合。
+///   state_id: 目标状态 ID。
+///
+/// Returns:
+///   如果存在出边返回 true，否则返回 false。
+/// 检查指定的节点是否存在出边。
+///
+/// Args:
+///   edges: 图的所有边集合。
+///   state_id: 目标状态 ID。
+///
+/// Returns:
+///   如果存在出边返回 true，否则返回 false。
 fn has_outgoing_edge(edges: &[Edge], state_id: i32) -> bool {
 
     edges.iter().any(|edge| edge.fromState == state_id)
 
 }
 
+/// 使用保守的 Thompson 构造法计算 Kleene 闭包（*），避免图结构的冗余合并。
+///
+/// Args:
+///   g: 目标 NFA。
+///
+/// Returns:
+///   进行保守闭包运算后的新 NFA。
+/// 使用保守的 Thompson 构造法计算 Kleene 闭包（*），避免图结构的冗余合并。
+///
+/// Args:
+///   g: 目标 NFA。
+///
+/// Returns:
+///   进行保守闭包运算后的新 NFA。
 fn closure_conservative(mut g: Graph) -> Graph {
 
     shift_graph(&mut g, 1);
@@ -1974,6 +2207,20 @@ fn closure_conservative(mut g: Graph) -> Graph {
 
 /// Kleene 闭包：零次或多次
 
+/// 对 NFA 进行 Kleene 闭包（*，匹配零次或多次）运算。
+///
+/// Args:
+///   g: 目标 NFA。
+///
+/// Returns:
+///   进行闭包运算后的新 NFA。
+/// 对 NFA 进行 Kleene 闭包（*，匹配零次或多次）运算。
+///
+/// Args:
+///   g: 目标 NFA。
+///
+/// Returns:
+///   进行闭包运算后的新 NFA。
 pub fn closure(g: Graph) -> Graph {
 
     if g.pStateTable.is_empty() {
@@ -2142,6 +2389,20 @@ pub fn closure(g: Graph) -> Graph {
 
 /// Zero-or-one operator.
 
+/// 对 NFA 进行零次或一次（?）运算。
+///
+/// Args:
+///   g: 目标 NFA。
+///
+/// Returns:
+///   运算后的新 NFA。
+/// 对 NFA 进行零次或一次（?）运算。
+///
+/// Args:
+///   g: 目标 NFA。
+///
+/// Returns:
+///   运算后的新 NFA。
 pub fn zeroOrOne(mut g: Graph) -> Graph {
 
     shift_graph(&mut g, 1);

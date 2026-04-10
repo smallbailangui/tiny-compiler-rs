@@ -69,6 +69,22 @@ pub fn get_index(c: char) -> i32 {
 }
 
 /// 创建闭区间字符集 `[from_char, to_char]`。
+/// 根据给定的起始字符和结束字符创建一个字符集区间。
+///
+/// Args:
+///   from_char: 区间的起始字符。
+///   to_char: 区间的结束字符。
+///
+/// Returns:
+///   新建字符集的 ID。
+/// 根据给定的起始字符和结束字符创建一个字符集区间。
+///
+/// Args:
+///   from_char: 区间的起始字符。
+///   to_char: 区间的结束字符。
+///
+/// Returns:
+///   新建字符集的 ID。
 pub fn range(from_char: char, to_char: char) -> i32 {
     let index = next_char_set_index();
     push_segment(index, 1, from_char, to_char);
@@ -76,6 +92,22 @@ pub fn range(from_char: char, to_char: char) -> i32 {
 }
 
 /// 两个单字符求并，返回新字符集 id。
+/// 计算两个字符的并集并返回新的字符集 ID。
+///
+/// Args:
+///   c1: 第一个字符。
+///   c2: 第二个字符。
+///
+/// Returns:
+///   新建字符集的 ID。
+/// 计算两个字符的并集并返回新的字符集 ID。
+///
+/// Args:
+///   c1: 第一个字符。
+///   c2: 第二个字符。
+///
+/// Returns:
+///   新建字符集的 ID。
 pub fn union_chars(c1: char, c2: char) -> i32 {
     let mut a = c1 as u32;
     let mut b = c2 as u32;
@@ -117,6 +149,22 @@ pub fn union_chars(c1: char, c2: char) -> i32 {
 }
 
 /// 字符集与单字符求并。
+/// 计算一个字符集与一个字符的并集。
+///
+/// Args:
+///   char_set_id: 已有字符集的 ID。
+///   c: 要加入的字符。
+///
+/// Returns:
+///   合并后的新字符集 ID。
+/// 计算一个字符集与一个字符的并集。
+///
+/// Args:
+///   char_set_id: 已有字符集的 ID。
+///   c: 要加入的字符。
+///
+/// Returns:
+///   合并后的新字符集 ID。
 pub fn union_charset_char(char_set_id: i32, c: char) -> i32 {
     let mut segments = Vec::new();
     let mut is_contain = false;
@@ -208,6 +256,22 @@ pub fn union_charset_char(char_set_id: i32, c: char) -> i32 {
 }
 
 /// 字符集并运算：`char_set_id1 ∪ char_set_id2`。
+/// 计算两个字符集的并集。
+///
+/// Args:
+///   char_set_id1: 第一个字符集 ID。
+///   char_set_id2: 第二个字符集 ID。
+///
+/// Returns:
+///   合并后的新字符集 ID。
+/// 计算两个字符集的并集。
+///
+/// Args:
+///   char_set_id1: 第一个字符集 ID。
+///   char_set_id2: 第二个字符集 ID。
+///
+/// Returns:
+///   合并后的新字符集 ID。
 pub fn union_charsets(char_set_id1: i32, char_set_id2: i32) -> i32 {
     let mut merged = segments_of(char_set_id1);
     merged.extend(segments_of(char_set_id2));
@@ -299,6 +363,22 @@ pub fn difference_charsets(char_set_id1: i32, char_set_id2: i32) -> i32 {
 }
 
 /// 字符集与单字符的差：`char_set_id - {c}`。
+/// 计算字符集与某个字符的差集（从字符集中移除该字符）。
+///
+/// Args:
+///   char_set_id: 目标字符集 ID。
+///   c: 要移除的字符。
+///
+/// Returns:
+///   操作后的新字符集 ID。
+/// 计算字符集与某个字符的差集（从字符集中移除该字符）。
+///
+/// Args:
+///   char_set_id: 目标字符集 ID。
+///   c: 要移除的字符。
+///
+/// Returns:
+///   操作后的新字符集 ID。
 pub fn difference_charset_char(char_set_id: i32, c: char) -> i32 {
     let mut segement_id = 1;
     let new_index = next_char_set_index();
