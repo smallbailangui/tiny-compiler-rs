@@ -84,4 +84,15 @@ fn test_tiny_compiler() {
     for token in tokens {
         println!("  {:?}", token);
     }
+
+    // for token in tokens {
+    //     let content = if let Some(val) = token.value {
+    //         val.to_string()
+    //     } else if let Some(ref val) = token.identify {
+    //         val.clone()
+    //     } else {
+    //         "-".to_string()
+    //     };
+    //     println!("  {:<16} | {}", format!("{:?}", token.lexeme_category), content);
+    // }
 }
