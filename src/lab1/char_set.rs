@@ -79,6 +79,8 @@ pub fn get_index(c: char) -> i32 {
 ///   新建字符集的 ID。
 /// 根据给定的起始字符和结束字符创建一个字符集区间。
 ///
+/// 逻辑说明：申请一个新的字符集 ID，将指定的字符区间 `[from_char, to_char]` 作为唯一线段直接存入全局静态表中。
+///
 /// Args:
 ///   from_char: 区间的起始字符。
 ///   to_char: 区间的结束字符。
@@ -94,13 +96,10 @@ pub fn range(from_char: char, to_char: char) -> i32 {
 /// 两个单字符求并，返回新字符集 id。
 /// 计算两个字符的并集并返回新的字符集 ID。
 ///
-/// Args:
-///   c1: 第一个字符。
-///   c2: 第二个字符。
-///
-/// Returns:
-///   新建字符集的 ID。
-/// 计算两个字符的并集并返回新的字符集 ID。
+/// 逻辑说明：判断两个字符的关系：
+/// 1. 两字符相同：只需构造单个点段。
+/// 2. 字符在编码上相邻：合并为连续的单线段 `[c1, c2]`。
+/// 3. 字符不相邻：构造两个独立的点段，并归属为同一个新字符集 ID。
 ///
 /// Args:
 ///   c1: 第一个字符。
@@ -151,13 +150,10 @@ pub fn union_chars(c1: char, c2: char) -> i32 {
 /// 字符集与单字符求并。
 /// 计算一个字符集与一个字符的并集。
 ///
-/// Args:
-///   char_set_id: 已有字符集的 ID。
-///   c: 要加入的字符。
-///
-/// Returns:
-///   合并后的新字符集 ID。
-/// 计算一个字符集与一个字符的并集。
+/// 逻辑说明：遍历设定字符集的各区间段，判断字符 c 是否已包含在线段中、或与某线段左/右邻接。
+/// 1. 刚好桥接：合并两个单边相邻区间。
+/// 2. 仅单边相邻：扩展该段的左/右边界。
+/// 3. 完全独立：新增一个单独的点段。
 ///
 /// Args:
 ///   char_set_id: 已有字符集的 ID。
@@ -258,13 +254,9 @@ pub fn union_charset_char(char_set_id: i32, c: char) -> i32 {
 /// 字符集并运算：`char_set_id1 ∪ char_set_id2`。
 /// 计算两个字符集的并集。
 ///
-/// Args:
-///   char_set_id1: 第一个字符集 ID。
-///   char_set_id2: 第二个字符集 ID。
-///
-/// Returns:
-///   合并后的新字符集 ID。
-/// 计算两个字符集的并集。
+/// 逻辑说明：提取两个字符集下的所有段，按区间起点进行升序排序。
+/// 随后应用线性合并扫描算法（类似合并重叠区间问题）：判断后一个区间的起点
+/// 是否落在前一个区间的范围内或相邻；若是，则合并区间边界；否则加入集合中。
 ///
 /// Args:
 ///   char_set_id1: 第一个字符集 ID。
@@ -291,6 +283,7 @@ pub fn union_charsets(char_set_id1: i32, char_set_id2: i32) -> i32 {
     let mut current = merged[0].clone();
     for seg in merged.into_iter().skip(1) {
         if seg.fromChar <= char::from_u32(current.toChar as u32 + 1).unwrap_or(current.toChar) {
+            //不断更新tochar以合并区间
             current.toChar = max(current.toChar, seg.toChar);
         } else {
             push_segment(new_index, segement_id, current.fromChar, current.toChar);
@@ -304,6 +297,9 @@ pub fn union_charsets(char_set_id1: i32, char_set_id2: i32) -> i32 {
 }
 
 /// 字符集差运算：`char_set_id1 - char_set_id2`。
+///
+/// 逻辑说明：求集合差运算类似于合并重叠区间。扫描原字符集，并对于每一个区间段，
+/// 计算它是否被 `list2` 的任何元素扣减。这里使用双指针线性的方法逐一去除掉相交子集。
 pub fn difference_charsets(char_set_id1: i32, char_set_id2: i32) -> i32 {
     let list1 = segments_of(char_set_id1);
     let list2 = segments_of(char_set_id2);
@@ -365,13 +361,11 @@ pub fn difference_charsets(char_set_id1: i32, char_set_id2: i32) -> i32 {
 /// 字符集与单字符的差：`char_set_id - {c}`。
 /// 计算字符集与某个字符的差集（从字符集中移除该字符）。
 ///
-/// Args:
-///   char_set_id: 目标字符集 ID。
-///   c: 要移除的字符。
-///
-/// Returns:
-///   操作后的新字符集 ID。
-/// 计算字符集与某个字符的差集（从字符集中移除该字符）。
+/// 逻辑说明：遍历目标字符集的各区间段，由于待移除对象是一个字符，处理情况如下：
+/// 1. 当前区间不含字符 c：直接复制保留。
+/// 2. 命中某线段边缘：缩减左(或右)边界 `+1` (或 `-1`)。
+/// 3. c 命中线段内部某一字符：拆分成左右两个独立区间。
+/// 4. 当前区间仅为 c （单元素点段）：删去后为空，直接略过。
 ///
 /// Args:
 ///   char_set_id: 目标字符集 ID。

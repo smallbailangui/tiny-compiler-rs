@@ -2,19 +2,46 @@
 
 use lab1::category::LexemeCategory;
 use lab1::{
-    closure, create_tiny_lexical_dfa, generateBasicNFA, product, range, reset_global_tables, union,
+    closure, create_tiny_lexical_dfa, difference_charsets, generateBasicNFA, product, range,
+    reset_global_tables, show_char_set_table, union, union_charsets,
 };
 
 /// 程序入口：首先运行正则表达式 `(a|b)*abb` 的 NFA 到 DFA 转换示例，
 /// 然后运行 TINY 语言的词法分析器示例，解析一段 TINY 代码。
 fn main() {
-    println!("========== 测试任务 1: 验证正则表达式 (a|b)*abb ==========");
+    println!("========== 测试任务 0: 验证字符集运算 ==========");
+    test_char_sets();
+
+    println!("\n========== 测试任务 1: 验证正则表达式 (a|b)*abb ==========");
     // 执行正则表达式匹配的测试函数
     test_regex_abb();
 
     println!("\n========== 测试任务 2: TINY 语言词法分析验证 ==========");
     // 执行 TINY 语言的词法分析测试
     test_tiny_compiler();
+}
+
+/// 任务 0：构造和运算字符集（并集、差集等）。
+fn test_char_sets() {
+    reset_global_tables();
+    
+    // 构造区间字符集和单字符字符集
+    let set_a_d = range('a', 'd');
+    let set_c_f = range('c', 'f');
+    
+    println!("集合 1: [a-d], ID: {}", set_a_d);
+    println!("集合 2: [c-f], ID: {}", set_c_f);
+
+    // 字符集并集
+    let union_set = union_charsets(set_a_d, set_c_f);
+    println!("[a-d] U [c-f], 新 ID: {}", union_set);
+
+    // 字符集差集
+    let diff_set = difference_charsets(set_a_d, set_c_f);
+    println!("[a-d] - [c-f], 新 ID: {}", diff_set);
+
+    println!("\n当前系统内全局字符集分布:");
+    show_char_set_table();
 }
 
 /// 任务 1：构造 `(a|b)*abb` 的 NFA，最简化后转 DFA，并测试样例字符串。
@@ -46,8 +73,12 @@ fn test_regex_abb() {
     let step2 = product(step1, nfa_b2);
     let final_nfa = product(step2, nfa_b3).minimize_nfa();
 
+    //println!("最简 NFA 状态机结构输出: {:#?}", final_nfa);
+
     // 7) NFA 转 DFA。
     let dfa = final_nfa.NFA_to_DFA();
+    
+    // println!("DFA 状态机结构输出: {:#?}", dfa);
 
     // 8) 验证测试用例。
     let test_cases = vec!["abb", "ababb", "bbbaabb", "aba", "bba", "12.323"];
@@ -62,6 +93,9 @@ fn test_tiny_compiler() {
     // 重置全局状态后构造词法自动机。
     reset_global_tables();
     let dfa = create_tiny_lexical_dfa();
+
+    // 可以取消注释下面这行来输出完整的 TINY 词法分析 DFA（由于状态极多，输出会非常长）
+    // println!("TINY DFA 状态机结构输出: {:#?}", dfa);
 
     // 示例程序：包含浮点数和科学计数法测试。
     let sample = r#"
