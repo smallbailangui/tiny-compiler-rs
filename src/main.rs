@@ -50,7 +50,7 @@ fn test_regex_abb() {
     let dfa = final_nfa.NFA_to_DFA();
 
     // 8) 验证测试用例。
-    let test_cases = vec!["abb", "ababb", "bbbaabb", "aba", "bba"];
+    let test_cases = vec!["abb", "ababb", "bbbaabb", "aba", "bba", "12.323"];
     for tc in test_cases {
         let is_match = dfa.get_lexeme_category(tc).is_some();
         println!("测试字符串 {:<10} -> 匹配结果: {}", tc, is_match);
@@ -63,12 +63,14 @@ fn test_tiny_compiler() {
     reset_global_tables();
     let dfa = create_tiny_lexical_dfa();
 
-    // 示例程序。
+    // 示例程序：包含浮点数和科学计数法测试。
     let sample = r#"
-        { Sample program in TINY language }
+        { Sample program in TINY language with real numbers }
         read x;
-        if 0 < x then
-            fact := 1;
+        if 0.5 < x then
+            fact := 1.0;
+            rate := 1.2e-3;
+            max_val := 3E+5;
             repeat
                 fact := fact * x;
                 x := x - 1

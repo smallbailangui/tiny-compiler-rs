@@ -1584,6 +1584,10 @@ pub fn NFA_to_DFA(&self) -> Graph {
 
             token.value = buffer.parse::<i64>().ok();
 
+        } else if category == LexemeCategory::FLOAT_CONST || category == LexemeCategory::SCIENTIFIC_CONST {
+
+            token.identify = Some(buffer.to_string());
+
         } else if category == LexemeCategory::KEYWORD {
 
             token.identify = Some(buffer.to_string());

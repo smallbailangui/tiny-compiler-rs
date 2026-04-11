@@ -151,12 +151,55 @@ pub fn create_tiny_lexical_dfa() -> Graph {
         generateBasicNFA("CHAR", char_set_right_note, Some(LexemeCategory::NOTE)),
     );
 
-    // 数字（当前仅整数）与空白。
-    let graph_number = plusClosure(generateBasicNFA(
+    // 数字：支持整数、浮点数和科学计数法。
+    let graph_integer = plusClosure(generateBasicNFA(
         "CHARSET",
         digit,
         Some(LexemeCategory::INTEGER_CONST),
     ));
+
+    let char_set_dot = range('.', '.');
+    let graph_float = product(
+        product(
+            plusClosure(generateBasicNFA("CHARSET", digit, None)),
+            generateBasicNFA("CHAR", char_set_dot, None),
+        ),
+        plusClosure(generateBasicNFA(
+            "CHARSET",
+            digit,
+            Some(LexemeCategory::FLOAT_CONST),
+        )),
+    );
+
+    let char_set_e = range('e', 'e');
+    let char_set_E = range('E', 'E');
+    let char_set_exp = union_charsets(char_set_e, char_set_E);
+    let char_set_sign = union_charsets(char_set_add, char_set_sub);
+
+    let base_int_for_sci = plusClosure(generateBasicNFA("CHARSET", digit, None));
+    let base_float_for_sci = product(
+        product(
+            plusClosure(generateBasicNFA("CHARSET", digit, None)),
+            generateBasicNFA("CHAR", char_set_dot, None),
+        ),
+        plusClosure(generateBasicNFA("CHARSET", digit, None)),
+    );
+    let base_sci = union(base_int_for_sci, base_float_for_sci);
+
+    let exp_part = product(
+        generateBasicNFA("CHARSET", char_set_exp, None),
+        product(
+            zeroOrOne(generateBasicNFA("CHARSET", char_set_sign, None)),
+            plusClosure(generateBasicNFA(
+                "CHARSET",
+                digit,
+                Some(LexemeCategory::SCIENTIFIC_CONST),
+            )),
+        ),
+    );
+    let graph_scientific = product(base_sci, exp_part);
+
+    let graph_number = union_many(vec![graph_integer, graph_float, graph_scientific]);
     let graph_blank = generateBasicNFA("CHAR", char_set_space, Some(LexemeCategory::SPACE_CONST));
 
     let lexical_graph = union_many(vec![
