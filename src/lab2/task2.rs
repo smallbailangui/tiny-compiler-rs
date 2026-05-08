@@ -293,7 +293,14 @@ pub fn exhaustTransition(itemSet0: ItemSet) {
 
             if !contains(&mut Inew) {
                 getClosure(&mut Inew);
-                P_ITEM_SET_TABLE.lock().unwrap().push(Inew.clone());
+                let len = {
+                    let mut table = P_ITEM_SET_TABLE.lock().unwrap();
+                    table.push(Inew.clone());
+                    table.len()
+                };
+                if len % 50 == 0 {
+                    println!("当前项集数量: {}", len);
+                }
                 transition_queue.push(Inew.clone());
             }
             P_TRANSITION_EDGE_TABLE
@@ -327,7 +334,14 @@ pub fn exhaustTransition(itemSet0: ItemSet) {
 
             if !contains(&mut Inew) {
                 getClosure(&mut Inew);
-                P_ITEM_SET_TABLE.lock().unwrap().push(Inew.clone());
+                let len = {
+                    let mut table = P_ITEM_SET_TABLE.lock().unwrap();
+                    table.push(Inew.clone());
+                    table.len()
+                };
+                if len % 50 == 0 {
+                    println!("当前项集数量: {}", len);
+                }
                 transition_queue.push(Inew.clone());
             }
             P_TRANSITION_EDGE_TABLE

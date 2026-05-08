@@ -25,7 +25,11 @@ pub fn testTask2() {
 }
 
 pub fn testTask3() {
+    crate::lab2::task3::reset_lab2_state();
+    println!("开始构建 TINY 文法...");
     crate::lab2::task3::create_TINY_Grammar();
+    println!("开始构建 TINY LR(0) DFA...");
     crate::lab2::task3::create_TINY_LR0_DFA();
+    println!("开始进行 TINY 语法分析测试...");
     crate::lab2::task3::test_TINY3();
 }
