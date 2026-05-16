@@ -1,4 +1,5 @@
 ﻿mod lab1;
+mod lab3;
 
 use lab1::category::LexemeCategory;
 use lab1::{
@@ -7,7 +8,8 @@ use lab1::{
 };
 
 /// 程序入口：首先运行正则表达式 `(a|b)*abb` 的 NFA 到 DFA 转换示例，
-/// 然后运行 TINY 语言的词法分析器示例，解析一段 TINY 代码。
+/// 然后运行 TINY 语言的词法分析器示例，解析一段 TINY 代码，
+/// 最后运行实验 3 的词法分析器构造工具测试。
 fn main() {
     println!("========== 测试任务 0: 验证字符集运算 ==========");
     test_char_sets();
@@ -19,6 +21,10 @@ fn main() {
     println!("\n========== 测试任务 2: TINY 语言词法分析验证 ==========");
     // 执行 TINY 语言的词法分析测试
     test_tiny_compiler();
+
+    println!("\n\n========== 实验 3：词法分析器构造工具的实现 ==========");
+    // 执行实验 3 的测试
+    lab3::run_lab3_test();
 }
 
 /// 任务 0：构造和运算字符集（并集、差集等）。

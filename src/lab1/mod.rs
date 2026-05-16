@@ -59,24 +59,11 @@ pub fn create_tiny_lexical_dfa() -> Graph {
     let char_set_left_note = range('{', '{');
     let char_set_right_note = range('}', '}');
 
-    // 注释内容允许字符池（不包含右花括号，避免提前吞掉结束符）。
-    let mut note_pool = letters;
-    for extra in [
-        char_set_add,
-        char_set_sub,
-        char_set_mul,
-        char_set_div,
-        char_set_equal,
-        char_set_less,
-        char_set_left_paren,
-        char_set_right_paren,
-        char_set_semicolon,
-        char_set_colon,
-        char_set_space,
-    ] {
-        note_pool = union_charsets(note_pool, extra);
-    }
-    let note_char_set = union_charsets(note_pool, letter_digit);
+    // 注释内容允许字符池（包含除右花括号'}'之外的所有可打印ASCII字符，
+    // 以及换行、回车、制表符，避免因缺字符导致注释被误拆散）。
+    // 先取空格到 '~' 的全体可打印段，再减去 '}'。
+    let note_all_printable = range(' ', '~');
+    let note_char_set = difference_charset_char(note_all_printable, '}');
 
     // 关键字 NFA。
     let keyword_graph = union_many(vec![
