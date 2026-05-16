@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use crate::lab1::{
     category::LexemeCategory,
-    char_set::range,
+    char_set::{range, difference_charset_char, difference_charsets, segments_of},
     graph::{generateBasicNFA, union, product, closure, plusClosure, zeroOrOne, Graph},
 };
 
@@ -17,35 +17,52 @@ pub struct RegexDef {
 }
 
 /// 将正则语言描述的文本解析为定义列表
+/// 支持多行定义：以 `|` 开头的行视为前一个定义的续行
 pub fn parse_regex_definitions(text: &str) -> Vec<RegexDef> {
     let mut defs = Vec::new();
+    let mut current: Option<RegexDef> = None;
+
     for line in text.lines() {
-        let line = line.trim();
-        if line.is_empty() {
+        let original = line.trim();
+        if original.is_empty() {
             continue;
         }
-        // 跳过行首的编号 (如 "1 ")
-        let line = skip_leading_number(line);
-        // 格式: [@]name -> regex_pattern
-        if let Some(def) = parse_one_definition(line) {
+        let line = skip_leading_number(original);
+
+        // 续行：以 `|` 开头，追加到前一个定义的 pattern
+        if line.starts_with('|') {
+            if let Some(ref mut def) = current {
+                let continuation = line[1..].trim();
+                def.pattern.push(' ');
+                def.pattern.push('|');
+                def.pattern.push(' ');
+                def.pattern.push_str(continuation);
+            }
+            continue;
+        }
+
+        // 先将前一个定义保存
+        if let Some(def) = current.take() {
             defs.push(def);
         }
+
+        // 格式: [@]name -> regex_pattern
+        if let Some(def) = parse_one_definition(line) {
+            current = Some(def);
+        }
     }
+
+    // 保存最后一个定义
+    if let Some(def) = current.take() {
+        defs.push(def);
+    }
+
     defs
 }
 
 /// 跳过行首的 "1 ", "12 " 等编号
 fn skip_leading_number(s: &str) -> &str {
     let s = s.trim();
-    let mut chars = s.char_indices();
-    while let Some((_, c)) = chars.next() {
-        if c.is_ascii_digit() || c == ' ' {
-            continue;
-        }
-        // 回退到第一个非数字非空格字符
-        break;
-    }
-    // 简化：找到第一个非数字非空格字符
     let start = s.find(|c: char| !c.is_ascii_digit() && c != ' ').unwrap_or(0);
     &s[start..]
 }
@@ -79,15 +96,15 @@ fn parse_one_definition(line: &str) -> Option<RegexDef> {
 /// 正则表达式 AST 节点
 #[derive(Clone, Debug)]
 enum RegexAST {
-    CharSet(i32),               // 字符集 ID
-    CharLiteral(char),          // 字符字面量
-    Name(String),               // 引用其他命名正则
+    CharSet(i32, Option<char>),  // 字符集 ID 及可选关联字符（单字符时用于范围提取）
+    CharLiteral(char),           // 字符字面量
+    Name(String),                // 引用其他命名正则
     Union(Box<RegexAST>, Box<RegexAST>),
     Concat(Box<RegexAST>, Box<RegexAST>),
     Star(Box<RegexAST>),
     Plus(Box<RegexAST>),
     Option_(Box<RegexAST>),
-    Range(Box<RegexAST>, Box<RegexAST>),
+    Range(char, char),           // 字符范围运算: 'a'~'z' 或 'a'..'z'
     Difference(Box<RegexAST>, Box<RegexAST>),
 }
 
@@ -102,7 +119,6 @@ pub fn build_nfa_from_defs(defs: &[RegexDef]) -> (Graph, HashMap<String, LexemeC
         env.insert(def.name.clone(), nfa);
 
         if def.is_token {
-            // 将 @name 映射到 LexemeCategory
             let cat = name_to_category(&def.name);
             token_map.insert(def.name.clone(), cat);
         }
@@ -112,7 +128,6 @@ pub fn build_nfa_from_defs(defs: &[RegexDef]) -> (Graph, HashMap<String, LexemeC
     // 合并所有带 @ 的定义对应的 NFA
     let final_nfa = if let Some(last) = defs.last() {
         env.get(&last.name).cloned().unwrap_or_else(|| {
-            // 回退：合并所有 token 的 NFA
             merge_all_token_nfas(&env, &defs, &token_map)
         })
     } else {
@@ -154,6 +169,14 @@ fn name_to_category(name: &str) -> LexemeCategory {
         "cc" | "character_constant" => LexemeCategory::STRING_CONST,
         "space" | "blank" => LexemeCategory::SPACE_CONST,
         "crlf" | "newline" => LexemeCategory::SPACE_CONST,
+        "keyword" => LexemeCategory::KEYWORD,
+        "numeric_op" => LexemeCategory::NUMERIC_OPERATOR,
+        "compare_op" => LexemeCategory::COMPARE_OPERATOR,
+        "logic_op" => LexemeCategory::LOGIC_OPERATOR,
+        "assign" => LexemeCategory::ASSIGN_OPERATOR,
+        "id" => LexemeCategory::ID,
+        "integer_const" => LexemeCategory::INTEGER_CONST,
+        "note" => LexemeCategory::NOTE,
         _ => LexemeCategory::ID,
     }
 }
@@ -177,6 +200,7 @@ enum RegexTok {
     Tilde,
     Minus,
     Dot,       // 连接运算符 (·)
+    RangeOp,   // 范围运算符 (..)
     CharLit(char),
     Name(String),
     EOF,
@@ -199,13 +223,21 @@ fn tokenize_pattern(pattern: &str) -> Vec<RegexTok> {
             '~' => tokens.push(RegexTok::Tilde),
             '-' => tokens.push(RegexTok::Minus),
             '·' => tokens.push(RegexTok::Dot),
+            '.' => {
+                // 检查 ".." 范围运算符
+                if i + 1 < chars.len() && chars[i + 1] == '.' {
+                    tokens.push(RegexTok::RangeOp);
+                    i += 1; // 跳过第二个点
+                } else {
+                    tokens.push(RegexTok::CharLit('.'));
+                }
+            }
             '\'' => {
                 // 字符字面量
                 if i + 2 < chars.len() && chars[i + 2] == '\'' {
                     tokens.push(RegexTok::CharLit(chars[i + 1]));
                     i += 2;
                 } else if i + 1 < chars.len() {
-                    // 处理可能的多字符情况，取下一个非引号字符
                     tokens.push(RegexTok::CharLit(chars[i + 1]));
                     i += 1;
                     if i + 1 < chars.len() && chars[i + 1] == '\'' {
@@ -252,23 +284,87 @@ fn parse_union(tokens: &[RegexTok], pos: usize) -> (RegexAST, usize) {
     (left, pos)
 }
 
+/// 解析范围 / 差运算 (.., ~, -)
+/// 这些二元运算作用于字符级原子，优先级高于连接运算
+fn parse_range_diff(tokens: &[RegexTok], pos: usize) -> (RegexAST, usize) {
+    let (mut left, mut pos) = parse_unary(tokens, pos);
+    while pos < tokens.len()
+        && (tokens[pos] == RegexTok::RangeOp
+            || tokens[pos] == RegexTok::Tilde
+            || tokens[pos] == RegexTok::Minus)
+    {
+        let op_token = tokens[pos].clone();
+        pos += 1;
+        let (right, new_pos) = parse_unary(tokens, pos);
+        left = match op_token {
+            RegexTok::RangeOp | RegexTok::Tilde => {
+                // 从左右原子中提取字符
+                let from_c = extract_char(&left);
+                let to_c = extract_char(&right);
+                match (from_c, to_c) {
+                    (Some(fc), Some(tc)) => RegexAST::Range(fc, tc),
+                    _ => RegexAST::Range('\0', '\0'),
+                }
+            }
+            RegexTok::Minus => {
+                RegexAST::Difference(Box::new(left), Box::new(right))
+            }
+            _ => unreachable!(),
+        };
+        pos = new_pos;
+    }
+    (left, pos)
+}
+
+/// 从 AST 节点中提取字符值（用于范围运算）
+fn extract_char(ast: &RegexAST) -> Option<char> {
+    match ast {
+        RegexAST::CharSet(_, Some(c)) => Some(*c),
+        RegexAST::CharSet(id, None) => {
+            let segs = segments_of(*id);
+            if segs.len() == 1 && segs[0].fromChar == segs[0].toChar {
+                Some(segs[0].fromChar)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// 从 AST 节点中提取字符集 ID（用于差运算）
+fn extract_charset_id(ast: &RegexAST, _env: &HashMap<String, Graph>) -> Option<i32> {
+    match ast {
+        RegexAST::CharSet(id, _) => Some(*id),
+        RegexAST::Name(_name) => {
+            // 名字引用时无法直接拿到 charset id，暂不支持
+            // 会在 eval_ast_inner 中做处理
+            None
+        }
+        _ => None,
+    }
+}
+
 /// 解析连接运算
 fn parse_concat(tokens: &[RegexTok], pos: usize) -> (RegexAST, usize) {
-    let (mut left, mut pos) = parse_unary(tokens, pos);
+    let (mut left, mut pos) = parse_range_diff(tokens, pos);
     while pos < tokens.len()
         && tokens[pos] != RegexTok::Pipe
         && tokens[pos] != RegexTok::RParen
         && tokens[pos] != RegexTok::EOF
+        && tokens[pos] != RegexTok::RangeOp
+        && tokens[pos] != RegexTok::Tilde
+        && tokens[pos] != RegexTok::Minus
     {
         // 显式的连接运算符 ·
         if tokens[pos] == RegexTok::Dot {
             pos += 1;
-            let (right, new_pos) = parse_unary(tokens, pos);
+            let (right, new_pos) = parse_range_diff(tokens, pos);
             left = RegexAST::Concat(Box::new(left), Box::new(right));
             pos = new_pos;
         } else {
             // 隐式连接
-            let (right, new_pos) = parse_unary(tokens, pos);
+            let (right, new_pos) = parse_range_diff(tokens, pos);
             left = RegexAST::Concat(Box::new(left), Box::new(right));
             pos = new_pos;
         }
@@ -302,7 +398,7 @@ fn parse_unary(tokens: &[RegexTok], pos: usize) -> (RegexAST, usize) {
 /// 解析原子 (括号、字符、名字)
 fn parse_atom(tokens: &[RegexTok], pos: usize) -> (RegexAST, usize) {
     if pos >= tokens.len() {
-        return (RegexAST::CharSet(0), pos);
+        return (RegexAST::CharSet(0, None), pos);
     }
     match &tokens[pos] {
         RegexTok::LParen => {
@@ -317,7 +413,7 @@ fn parse_atom(tokens: &[RegexTok], pos: usize) -> (RegexAST, usize) {
         }
         RegexTok::CharLit(c) => {
             let id = range(*c, *c);
-            (RegexAST::CharSet(id), pos + 1)
+            (RegexAST::CharSet(id, Some(*c)), pos + 1)
         }
         RegexTok::Name(name) => {
             // 检查是否是 "空格字符"、"回车字符"、"换行字符" 等特殊名字
@@ -330,9 +426,9 @@ fn parse_atom(tokens: &[RegexTok], pos: usize) -> (RegexAST, usize) {
                     return (RegexAST::Name(name.clone()), pos + 1);
                 }
             };
-            (RegexAST::CharSet(id), pos + 1)
+            (RegexAST::CharSet(id, None), pos + 1)
         }
-        _ => (RegexAST::CharSet(0), pos + 1),
+        _ => (RegexAST::CharSet(0, None), pos + 1),
     }
 }
 
@@ -346,7 +442,6 @@ fn eval_ast(
     let mut nfa = eval_ast_inner(ast, env);
 
     if is_token {
-        // 给终结状态打上 category 标记
         let cat = name_to_category(token_name);
         for state in &mut nfa.pStateTable {
             if state.StateType == "MATCH" {
@@ -360,9 +455,14 @@ fn eval_ast(
 
 fn eval_ast_inner(ast: &RegexAST, env: &HashMap<String, Graph>) -> Graph {
     match ast {
-        RegexAST::CharSet(id) => {
-            // 单字符字符集
-            generateBasicNFA("CHAR", *id, None)
+        RegexAST::CharSet(id, _) => {
+            // 检查是单字符还是字符集区间
+            let segs = segments_of(*id);
+            if segs.len() == 1 && segs[0].fromChar == segs[0].toChar {
+                generateBasicNFA("CHAR", *id, None)
+            } else {
+                generateBasicNFA("CHARSET", *id, None)
+            }
         }
         RegexAST::CharLiteral(c) => {
             let id = range(*c, *c);
@@ -372,7 +472,6 @@ fn eval_ast_inner(ast: &RegexAST, env: &HashMap<String, Graph>) -> Graph {
             if let Some(g) = env.get(name) {
                 g.clone()
             } else {
-                // 未定义的名字：创建空 NFA
                 Graph::new(0)
             }
         }
@@ -398,18 +497,34 @@ fn eval_ast_inner(ast: &RegexAST, env: &HashMap<String, Graph>) -> Graph {
             let nfa = eval_ast_inner(inner, env);
             zeroOrOne(nfa)
         }
-        RegexAST::Range(l, r) => {
-            // 字符范围运算: 'a'~'z'
-            // 两个都是 CharSet 时做范围
-            let _l_nfa = eval_ast_inner(l, env);
-            let _r_nfa = eval_ast_inner(r, env);
-            // 简化处理：从 AST 中提取字符
-            Graph::new(0)
+        RegexAST::Range(from_c, to_c) => {
+            // 字符范围运算: 'a'~'z' 或 'a'..'z'
+            let id = range(*from_c, *to_c);
+            generateBasicNFA("CHARSET", id, None)
         }
         RegexAST::Difference(l, r) => {
-            let _l_nfa = eval_ast_inner(l, env);
-            let _r_nfa = eval_ast_inner(r, env);
-            Graph::new(0)
+            // 差运算: letter - 'i'（字符集与字符的差）或 letter - digit（字符集与字符集的差）
+            let l_id = extract_charset_id(l, env);
+            let r_id = extract_charset_id(r, env);
+            let r_char = extract_char(r);
+
+            let result_id = match (l_id, r_id, r_char) {
+                (Some(lid), _, Some(c)) => {
+                    // 字符集 - 字符
+                    difference_charset_char(lid, c)
+                }
+                (Some(lid), Some(rid), _) => {
+                    // 字符集 - 字符集
+                    difference_charsets(lid, rid)
+                }
+                _ => 0,
+            };
+
+            if result_id != 0 {
+                generateBasicNFA("CHARSET", result_id, None)
+            } else {
+                Graph::new(0)
+            }
         }
     }
 }

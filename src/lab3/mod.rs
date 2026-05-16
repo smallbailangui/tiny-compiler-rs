@@ -53,16 +53,27 @@ lexeme -> keyword | numeric_op | compare_op | logic_op | assign
         | id | integer_const | note | space
 "#;
 
-/// 使用 lab1 已验证的基础设施直接构建 TINY 词法 DFA。
-/// 该函数封装了 create_tiny_lexical_dfa() 调用，
-/// 并输出 DFA 的统计信息。
+/// 使用动态正则解析器（regex_lang.rs）构建 TINY 词法 DFA。
+/// 该函数不再直接调用 lab1 的静态 create_tiny_lexical_dfa()，
+/// 而是通过 parse_regex_definitions + build_nfa_from_defs 动态生成 NFA，
+/// 再经 NFA_to_DFA 得到最终的 DFA。
 pub fn build_tiny_lexer_dfa() -> crate::lab1::graph::Graph {
     use crate::lab1::reset_global_tables;
+    use crate::lab3::regex_lang::{parse_regex_definitions, build_nfa_from_defs};
+
     reset_global_tables();
-    let dfa = crate::lab1::create_tiny_lexical_dfa();
-    println!("TINY 词法 DFA 构建完成");
+
+    // 1. 解析全量 TINY 词法定义
+    let defs = parse_regex_definitions(TINY_LEX_FULL_DEF);
+
+    // 2. 动态构建 NFA
+    let (nfa, _token_map) = build_nfa_from_defs(&defs);
+
+    // 3. 将生成的 NFA 转换为 DFA
+    let dfa = nfa.NFA_to_DFA();
+
+    println!("TINY 词法 DFA 构建完成 (基于动态正则解析)");
     println!("  DFA 状态数: {}", dfa.numOfStates);
-    println!("  DFA 边数: {}", dfa.pEdgeTable.len());
     dfa
 }
 
