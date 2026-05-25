@@ -31,7 +31,7 @@ use graph::reset_graph_counter;
 /// 1. 定义基础字符集。
 /// 2. 构建关键字、运算符、标识符、注释、数字、空白等 NFA。
 /// 3. 通过 `union_many` 合并为总 NFA。
-/// 4. 最简化 NFA 后，再做子集构造得到 DFA。
+/// 4. 最简化 NFA 后，再做子集构造得到 DFA，最后使用 Hopcroft 算法最小化 DFA。
 pub fn create_tiny_lexical_dfa() -> Graph {
     // 每次构建前先清理全局表，避免脏数据影响。
     reset_global_tables();
@@ -198,7 +198,7 @@ pub fn create_tiny_lexical_dfa() -> Graph {
         graph_blank,
     ]);
 
-    lexical_graph.minimize_nfa().NFA_to_DFA()
+    lexical_graph.minimize_nfa().NFA_to_DFA().minimize_dfa()
 }
 
 /// 重置词法构造使用到的所有全局表。

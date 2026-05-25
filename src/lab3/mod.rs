@@ -69,8 +69,8 @@ pub fn build_tiny_lexer_dfa() -> crate::lab1::graph::Graph {
     // 2. 动态构建 NFA
     let (nfa, _token_map) = build_nfa_from_defs(&defs);
 
-    // 3. 将生成的 NFA 转换为 DFA
-    let dfa = nfa.NFA_to_DFA();
+    // 3. 将生成的 NFA 转换为 DFA，并最小化
+    let dfa = nfa.NFA_to_DFA().minimize_dfa();
 
     println!("TINY 词法 DFA 构建完成 (基于动态正则解析)");
     println!("  DFA 状态数: {}", dfa.numOfStates);

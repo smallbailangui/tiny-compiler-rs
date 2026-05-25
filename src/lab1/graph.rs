@@ -295,14 +295,10 @@ impl Graph {
     /// 经过精简和优化的 NFA，去除不必要的冗余状态和空跳边
 
     /// 调度对 NFA 的全面最小化优化，包括消除 ε-边、修剪无用状态及合并等价状态。
-///
-/// Returns:
-///   最小化后的 NFA 图。
-/// 调度对 NFA 的全面最小化优化，包括消除 ε-边、修剪无用状态及合并等价状态。
-///
-/// Returns:
-///   最小化后的 NFA 图。
-pub fn minimize_nfa(&self) -> Graph {
+    ///
+    /// Returns:
+    ///   最小化后的 NFA 图。
+    pub fn minimize_nfa(&self) -> Graph {
 
         let epsilon_free = self.build_epsilon_free_nfa();
 
@@ -317,14 +313,10 @@ pub fn minimize_nfa(&self) -> Graph {
 
 
     /// 将带有 ε-边的 NFA 转换为不带 ε-边的 NFA，消除空跳状态。
-///
-/// Returns:
-///   消除 ε-边后的图。
-/// 将带有 ε-边的 NFA 转换为不带 ε-边的 NFA，消除空跳状态。
-///
-/// Returns:
-///   消除 ε-边后的图。
-fn build_epsilon_free_nfa(&self) -> Graph {
+    ///
+    /// Returns:
+    ///   消除 ε-边后的图。
+    fn build_epsilon_free_nfa(&self) -> Graph {
 
         let state_count = self.pStateTable.len();
 
@@ -635,14 +627,10 @@ fn build_epsilon_free_nfa(&self) -> Graph {
 
 
     /// 裁剪自动机中的不可达状态和死状态，提升效率。
-///
-/// Returns:
-///   裁剪无用状态后的图。
-/// 裁剪自动机中的不可达状态和死状态，提升效率。
-///
-/// Returns:
-///   裁剪无用状态后的图。
-fn prune_useless_states(&self) -> Graph {
+    ///
+    /// Returns:
+    ///   裁剪无用状态后的图。
+    fn prune_useless_states(&self) -> Graph {
 
         if self.pStateTable.is_empty() {
 
@@ -763,14 +751,10 @@ fn prune_useless_states(&self) -> Graph {
 
 
     /// 查找并合并图中行为等价的状态（相同输入、相同输出），最小化状态数。
-///
-/// Returns:
-///   合并等价状态后的图。
-/// 查找并合并图中行为等价的状态（相同输入、相同输出），最小化状态数。
-///
-/// Returns:
-///   合并等价状态后的图。
-fn merge_equivalent_states(&self) -> Graph {
+    ///
+    /// Returns:
+    ///   合并等价状态后的图。
+    fn merge_equivalent_states(&self) -> Graph {
 
         if self.pStateTable.len() <= 1 {
 
@@ -1004,23 +988,258 @@ fn merge_equivalent_states(&self) -> Graph {
 
 
 
+    /// 使用 Hopcroft 算法对 DFA 进行最小化。
+    ///
+    /// 算法分阶段：
+    /// 1. 收集所有驱动器（输入符号）。
+    /// 2. 对每个驱动器构造完整转移（缺失的指向 trap 状态）。
+    /// 3. 初始划分：非接受态 / 接受态-按类别区分。
+    /// 4. Hopcroft 迭代精化。
+    /// 5. 用最终划分构建最小 DFA。
+    ///
+    /// Returns:
+    ///   最小化后的 DFA 图。
+    pub fn minimize_dfa(&self) -> Graph {
+        if self.pStateTable.len() <= 1 {
+            return self.clone();
+        }
+
+        // ---------- 1. 收集所有输入符号 ----------
+        let mut alphabet: Vec<(i32, String)> = Vec::new();
+        {
+            let mut seen: HashSet<(i32, String)> = HashSet::new();
+            for edge in &self.pEdgeTable {
+                if edge.driverId != -1 {
+                    let key = (edge.driverId, edge.DriverType.clone());
+                    if seen.insert(key.clone()) {
+                        alphabet.push(key);
+                    }
+                }
+            }
+        }
+
+        if alphabet.is_empty() {
+            return self.clone();
+        }
+
+        // ---------- 2. 补全 DFA：添加显式 trap 状态 ----------
+        let n_orig = self.pStateTable.len() as i32;
+        let trap_id = n_orig; // trap 状态 id = n_orig
+        let n_total = n_orig + 1;
+
+        // 构建完整转移表：transition[state][sym_idx] = target_state
+        let sym_count = alphabet.len();
+        let mut transition: Vec<Vec<i32>> = vec![vec![trap_id; sym_count]; n_total as usize];
+
+        for edge in &self.pEdgeTable {
+            if edge.driverId == -1 {
+                continue;
+            }
+            if edge.fromState < 0 || edge.fromState >= n_orig {
+                continue;
+            }
+            if edge.nextState < 0 || edge.nextState >= n_orig {
+                continue;
+            }
+            if let Some(sym_idx) = alphabet.iter().position(|(did, dt)| {
+                *did == edge.driverId && *dt == edge.DriverType
+            }) {
+                transition[edge.fromState as usize][sym_idx] = edge.nextState;
+            }
+        }
+
+        // trap 状态对所有输入都转移到自身
+        for sym_idx in 0..sym_count {
+            transition[trap_id as usize][sym_idx] = trap_id;
+        }
+
+        // ---------- 3. 初始划分 ----------
+        // 按 (is_match, lexeme_category_code) 分组
+        let mut initial_groups: BTreeMap<i32, Vec<i32>> = BTreeMap::new();
+
+        for state_id in 0..n_orig {
+            let state = &self.pStateTable[state_id as usize];
+            let key = if state.StateType == "MATCH" {
+                category_code(&state.LexemeCategory)
+            } else {
+                -2 // 非接受态统一归为一组
+            };
+            initial_groups.entry(key).or_default().push(state_id);
+        }
+
+        // trap 状态单独一组：没有 MATCH 类型
+        initial_groups.entry(-1).or_default().push(trap_id);
+
+        let mut partitions: Vec<Vec<i32>> = initial_groups.into_values().collect();
+        for partition in &mut partitions {
+            partition.sort_unstable();
+        }
+
+        // ---------- 4. Hopcroft 迭代 ----------
+        // 使用队列存放待处理的 splitter (partition_index, symbol_index)
+        let mut worklist: VecDeque<(usize, usize)> = VecDeque::new();
+
+        // 初始时，将每个 partition 和每个符号组合加入 worklist
+        // 但通常使用较小的 partition 作为 splitter
+        for p_idx in 0..partitions.len() {
+            for s_idx in 0..sym_count {
+                worklist.push_back((p_idx, s_idx));
+            }
+        }
+
+        while let Some((splitter_idx, sym_idx)) = worklist.pop_front() {
+            if splitter_idx >= partitions.len() {
+                continue;
+            }
+            let splitter: HashSet<i32> = partitions[splitter_idx].iter().cloned().collect();
+
+            let mut new_partitions: Vec<Vec<i32>> = Vec::new();
+
+            for partition in &partitions {
+                if partition.len() <= 1 {
+                    new_partitions.push(partition.clone());
+                    continue;
+                }
+
+                // 按转移到 splitter 的状态分组
+                let mut in_splitter: Vec<i32> = Vec::new();
+                let mut not_in_splitter: Vec<i32> = Vec::new();
+
+                for &state_id in partition {
+                    let target = transition[state_id as usize][sym_idx];
+                    if splitter.contains(&target) {
+                        in_splitter.push(state_id);
+                    } else {
+                        not_in_splitter.push(state_id);
+                    }
+                }
+
+                if in_splitter.is_empty() || not_in_splitter.is_empty() {
+                    // 未分裂
+                    new_partitions.push(partition.clone());
+                } else {
+                    // 分裂了
+                    new_partitions.push(in_splitter.clone());
+                    new_partitions.push(not_in_splitter.clone());
+
+                    // 将较小的新 partition 加入 worklist
+                    let smaller_idx = if in_splitter.len() <= not_in_splitter.len() {
+                        new_partitions.len() - 2 // in_splitter 先 push
+                    } else {
+                        new_partitions.len() - 1 // not_in_splitter 后 push
+                    };
+                    for s in 0..sym_count {
+                        worklist.push_back((smaller_idx, s));
+                    }
+                }
+            }
+
+            partitions = new_partitions;
+        }
+
+        // ---------- 5. 用划分结果构建最小化 DFA ----------
+        // 找到包含原始状态 0 的 partition 作为新的起始状态
+        if let Some(pos) = partitions.iter().position(|block| block.contains(&0)) {
+            if pos != 0 {
+                partitions.swap(0, pos);
+            }
+        }
+
+        // 构建 old -> new 状态映射
+        let mut old_to_new: HashMap<i32, i32> = HashMap::new();
+        for (new_id, block) in partitions.iter().enumerate() {
+            for sid in block {
+                old_to_new.insert(*sid, new_id as i32);
+            }
+        }
+
+        // 构建新状态表
+        let mut new_states: Vec<State> = Vec::with_capacity(partitions.len());
+        for (new_id, block) in partitions.iter().enumerate() {
+            let is_match = block.iter().any(|sid| {
+                if *sid == trap_id {
+                    return false;
+                }
+                self.pStateTable
+                    .get(*sid as usize)
+                    .map(|s| s.StateType == "MATCH")
+                    .unwrap_or(false)
+            });
+
+            let category = if is_match {
+                // 只考虑原始状态（排除 trap）
+                let orig_ids: Vec<i32> = block
+                    .iter()
+                    .filter(|&&sid| sid >= 0 && sid < n_orig)
+                    .copied()
+                    .collect();
+                pick_preferred_category_from_ids(orig_ids, &self.pStateTable)
+            } else {
+                None
+            };
+
+            new_states.push(State {
+                stateId: new_id as i32,
+                StateType: if is_match {
+                    "MATCH".to_string()
+                } else {
+                    "UNMATCH".to_string()
+                },
+                LexemeCategory: category,
+            });
+        }
+
+        // 构建新边表（忽略 trap 状态相关的边）
+        let mut new_edges: Vec<Edge> = Vec::new();
+        let mut seen: HashSet<(i32, i32, i32, String)> = HashSet::new();
+
+        for edge in &self.pEdgeTable {
+            if edge.driverId == -1 {
+                continue;
+            }
+            let (Some(&from), Some(&to)) = (
+                old_to_new.get(&edge.fromState),
+                old_to_new.get(&edge.nextState),
+            ) else {
+                continue;
+            };
+
+            // 排除 trap 状态的边
+            let trap_new_id = old_to_new.get(&trap_id).copied().unwrap_or(-1);
+            if from == trap_new_id || to == trap_new_id {
+                continue;
+            }
+
+            let dedup_key = (from, to, edge.driverId, edge.DriverType.clone());
+            if seen.insert(dedup_key) {
+                new_edges.push(Edge {
+                    fromState: from,
+                    nextState: to,
+                    driverId: edge.driverId,
+                    DriverType: edge.DriverType.clone(),
+                });
+            }
+        }
+
+        Graph {
+            graphId: next_graph_id(),
+            numOfStates: new_states.len() as i32,
+            pEdgeTable: new_edges,
+            pStateTable: new_states,
+        }
+    }
+
+
+
     /// 根据指定的 driverId 在当前状态集合上进行状态转移（move）。
-///
-/// Args:
-///   curr: 当前状态集合。
-///   driver_id: 驱动 ID。
-///
-/// Returns:
-///   转移后的状态集合。
-/// 根据指定的 driverId 在当前状态集合上进行状态转移（move）。
-///
-/// Args:
-///   curr: 当前状态集合。
-///   driver_id: 驱动 ID。
-///
-/// Returns:
-///   转移后的状态集合。
-pub fn move_by_driver(&self, curr: &HashSet<i32>, driver_id: i32) -> HashSet<i32> {
+    ///
+    /// Args:
+    ///   curr: 当前状态集合。
+    ///   driver_id: 驱动 ID。
+    ///
+    /// Returns:
+    ///   转移后的状态集合。
+    pub fn move_by_driver(&self, curr: &HashSet<i32>, driver_id: i32) -> HashSet<i32> {
 
         let mut result = HashSet::new();
 
@@ -1041,22 +1260,14 @@ pub fn move_by_driver(&self, curr: &HashSet<i32>, driver_id: i32) -> HashSet<i32
     /// Move by concrete character on CHAR/CHARSET edges.
 
     /// 根据指定的字符在当前状态集合上进行状态转移（move）。
-///
-/// Args:
-///   curr: 当前状态集合。
-///   c: 输入的字符。
-///
-/// Returns:
-///   转移后的状态集合。
-/// 根据指定的字符在当前状态集合上进行状态转移（move）。
-///
-/// Args:
-///   curr: 当前状态集合。
-///   c: 输入的字符。
-///
-/// Returns:
-///   转移后的状态集合。
-pub fn move_by_char(&self, curr: &HashSet<i32>, c: char) -> HashSet<i32> {
+    ///
+    /// Args:
+    ///   curr: 当前状态集合。
+    ///   c: 输入的字符。
+    ///
+    /// Returns:
+    ///   转移后的状态集合。
+    pub fn move_by_char(&self, curr: &HashSet<i32>, c: char) -> HashSet<i32> {
 
         let mut result = HashSet::new();
 
@@ -1081,20 +1292,13 @@ pub fn move_by_char(&self, curr: &HashSet<i32>, c: char) -> HashSet<i32> {
     /// 计算 epsilon 闭包
 
     /// 计算指定状态集合的 ε-闭包（所有通过 ε-边可达的状态）。
-///
-/// Args:
-///   curr: 初始状态集合。
-///
-/// Returns:
-///   包含 ε-闭包的状态集合。
-/// 计算指定状态集合的 ε-闭包（所有通过 ε-边可达的状态）。
-///
-/// Args:
-///   curr: 初始状态集合。
-///
-/// Returns:
-///   包含 ε-闭包的状态集合。
-pub fn epsilon_closure(&self, curr: &HashSet<i32>) -> HashSet<i32> {
+    ///
+    /// Args:
+    ///   curr: 初始状态集合。
+    ///
+    /// Returns:
+    ///   包含 ε-闭包的状态集合。
+    pub fn epsilon_closure(&self, curr: &HashSet<i32>) -> HashSet<i32> {
 
         let mut result = curr.clone();
 
@@ -1127,22 +1331,14 @@ pub fn epsilon_closure(&self, curr: &HashSet<i32>) -> HashSet<i32> {
     /// DTran 封装：在指定 driver 上 move + epsilon
 
     /// 封装 DTran 逻辑：组合 move_by_driver 和 epsilon_closure。
-///
-/// Args:
-///   curr: 当前状态集合。
-///   driver_id: 驱动 ID。
-///
-/// Returns:
-///   转移后并应用 ε-闭包的状态集合。
-/// 封装 DTran 逻辑：组合 move_by_driver 和 epsilon_closure。
-///
-/// Args:
-///   curr: 当前状态集合。
-///   driver_id: 驱动 ID。
-///
-/// Returns:
-///   转移后并应用 ε-闭包的状态集合。
-pub fn DTran_driver(&self, curr: &HashSet<i32>, driver_id: i32) -> HashSet<i32> {
+    ///
+    /// Args:
+    ///   curr: 当前状态集合。
+    ///   driver_id: 驱动 ID。
+    ///
+    /// Returns:
+    ///   转移后并应用 ε-闭包的状态集合。
+    pub fn DTran_driver(&self, curr: &HashSet<i32>, driver_id: i32) -> HashSet<i32> {
 
         let moved = self.move_by_driver(curr, driver_id);
 
@@ -1155,22 +1351,14 @@ pub fn DTran_driver(&self, curr: &HashSet<i32>, driver_id: i32) -> HashSet<i32> 
     /// DTran 封装：用字符驱动 move + epsilon
 
     /// 封装 DTran 逻辑：组合 move_by_char 和 epsilon_closure。
-///
-/// Args:
-///   curr: 当前状态集合。
-///   c: 输入的字符。
-///
-/// Returns:
-///   转移后并应用 ε-闭包的状态集合。
-/// 封装 DTran 逻辑：组合 move_by_char 和 epsilon_closure。
-///
-/// Args:
-///   curr: 当前状态集合。
-///   c: 输入的字符。
-///
-/// Returns:
-///   转移后并应用 ε-闭包的状态集合。
-pub fn DTran_char(&self, curr: &HashSet<i32>, c: char) -> HashSet<i32> {
+    ///
+    /// Args:
+    ///   curr: 当前状态集合。
+    ///   c: 输入的字符。
+    ///
+    /// Returns:
+    ///   转移后并应用 ε-闭包的状态集合。
+    pub fn DTran_char(&self, curr: &HashSet<i32>, c: char) -> HashSet<i32> {
 
         let moved = self.move_by_char(curr, c);
 
@@ -1187,14 +1375,10 @@ pub fn DTran_char(&self, curr: &HashSet<i32>, c: char) -> HashSet<i32> {
     /// 使用的是经典的子集构造法 (Subset Construction Algorithm)
 
     /// 使用子集构造法将当前的 NFA 转换为 DFA。
-///
-/// Returns:
-///   转换后的 DFA 图。
-/// 使用子集构造法将当前的 NFA 转换为 DFA。
-///
-/// Returns:
-///   转换后的 DFA 图。
-pub fn NFA_to_DFA(&self) -> Graph {
+    ///
+    /// Returns:
+    ///   转换后的 DFA 图。
+    pub fn NFA_to_DFA(&self) -> Graph {
 
         let mut node_list = Vec::new();
 
@@ -1322,7 +1506,7 @@ pub fn NFA_to_DFA(&self) -> Graph {
 
         // 根据状态集合生成 DFA 状态信息：
 
-        // - 只要集合内存在 MATCH 态，DFA 态初步判定为 MATCH；        // - 类别冲突时优先选择“非 ID 类别”；
+        // - 只要集合内存在 MATCH 态，DFA 态初步判定为 MATCH；        // - 类别冲突时优先选择"非 ID 类别"；
 
         for (idx, state_set) in dfa_state_sets.iter().enumerate() {
 
@@ -1708,15 +1892,6 @@ fn shift_graph(graph: &mut Graph, offset: i32) {
 ///
 /// Returns:
 ///   构建的基础 NFA 图。
-/// 创建一个基础的 NFA（通常用于匹配单个字符或字符集）。
-///
-/// Args:
-///   driverType: 驱动类型（如 CHAR 或 CHARSET）。
-///   driverId: 驱动 ID（字符集 ID 或字符 Unicode 值）。
-///   category: 可选的词法类别。
-///
-/// Returns:
-///   构建的基础 NFA 图。
 pub fn generateBasicNFA(
 
     driverType: &str,
@@ -1769,14 +1944,6 @@ pub fn generateBasicNFA(
 
 /// Union of two NFAs.
 
-/// 对两个 NFA 进行并集（|）运算。
-///
-/// Args:
-///   g1: 第一个 NFA。
-///   g2: 第二个 NFA。
-///
-/// Returns:
-///   进行并集运算后的新 NFA。
 /// 对两个 NFA 进行并集（|）运算。
 ///
 /// Args:
@@ -1923,14 +2090,6 @@ pub fn union(mut g1: Graph, mut g2: Graph) -> Graph {
 ///
 /// Returns:
 ///   进行连接运算后的新 NFA。
-/// 对两个 NFA 进行连接（串联）运算。
-///
-/// Args:
-///   g1: 第一个 NFA。
-///   g2: 第二个 NFA。
-///
-/// Returns:
-///   进行连接运算后的新 NFA。
 pub fn product(g1: Graph, mut g2: Graph) -> Graph {
 
     let g1_count = g1.pStateTable.len() as i32;
@@ -1995,13 +2154,6 @@ pub fn product(g1: Graph, mut g2: Graph) -> Graph {
 
 /// One-or-more closure.
 
-/// 对 NFA 进行正闭包（+，匹配一次或多次）运算。
-///
-/// Args:
-///   g: 目标 NFA。
-///
-/// Returns:
-///   进行正闭包运算后的新 NFA。
 /// 对 NFA 进行正闭包（+，匹配一次或多次）运算。
 ///
 /// Args:
@@ -2075,14 +2227,6 @@ fn add_epsilon_edge(edges: &mut Vec<Edge>, from_state: i32, to_state: i32) {
 ///
 /// Returns:
 ///   如果存在入边返回 true，否则返回 false。
-/// 检查指定的节点是否存在入边。
-///
-/// Args:
-///   edges: 图的所有边集合。
-///   state_id: 目标状态 ID。
-///
-/// Returns:
-///   如果存在入边返回 true，否则返回 false。
 fn has_incoming_edge(edges: &[Edge], state_id: i32) -> bool {
 
     edges
@@ -2101,27 +2245,12 @@ fn has_incoming_edge(edges: &[Edge], state_id: i32) -> bool {
 ///
 /// Returns:
 ///   如果存在出边返回 true，否则返回 false。
-/// 检查指定的节点是否存在出边。
-///
-/// Args:
-///   edges: 图的所有边集合。
-///   state_id: 目标状态 ID。
-///
-/// Returns:
-///   如果存在出边返回 true，否则返回 false。
 fn has_outgoing_edge(edges: &[Edge], state_id: i32) -> bool {
 
     edges.iter().any(|edge| edge.fromState == state_id)
 
 }
 
-/// 使用保守的 Thompson 构造法计算 Kleene 闭包（*），避免图结构的冗余合并。
-///
-/// Args:
-///   g: 目标 NFA。
-///
-/// Returns:
-///   进行保守闭包运算后的新 NFA。
 /// 使用保守的 Thompson 构造法计算 Kleene 闭包（*），避免图结构的冗余合并。
 ///
 /// Args:
@@ -2211,13 +2340,6 @@ fn closure_conservative(mut g: Graph) -> Graph {
 
 /// Kleene 闭包：零次或多次
 
-/// 对 NFA 进行 Kleene 闭包（*，匹配零次或多次）运算。
-///
-/// Args:
-///   g: 目标 NFA。
-///
-/// Returns:
-///   进行闭包运算后的新 NFA。
 /// 对 NFA 进行 Kleene 闭包（*，匹配零次或多次）运算。
 ///
 /// Args:
@@ -2400,13 +2522,6 @@ pub fn closure(g: Graph) -> Graph {
 ///
 /// Returns:
 ///   运算后的新 NFA。
-/// 对 NFA 进行零次或一次（?）运算。
-///
-/// Args:
-///   g: 目标 NFA。
-///
-/// Returns:
-///   运算后的新 NFA。
 pub fn zeroOrOne(mut g: Graph) -> Graph {
 
     shift_graph(&mut g, 1);
@@ -2518,4 +2633,3 @@ pub fn zeroOrOne(mut g: Graph) -> Graph {
     }
 
 }
-
