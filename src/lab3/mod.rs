@@ -33,6 +33,7 @@ pub const TINY_LEX_FULL_DEF: &str = r#"
 digit           -> '0'..'9'
 letter          -> 'a'..'z' | 'A'..'Z'
 letter_or_digit -> letter | digit
+character       -> ' '..'~' - '}'
 
 @keyword    -> 'i' 'f' | 't' 'h' 'e' 'n' | 'e' 'l' 's' 'e' | 'e' 'n' 'd'
              | 'r' 'e' 'p' 'e' 'a' 't' | 'u' 'n' 't' 'i' 'l'
@@ -155,7 +156,15 @@ mod tests {
             end
         "#;
 
+        let comment = "{ Sample program in TINY language - computes factorial }";
+        assert_eq!(
+            dfa.get_lexeme_category(comment),
+            Some(crate::lab1::LexemeCategory::NOTE),
+            "应该将完整大括号内容识别为注释 NOTE"
+        );
+
         let tokens = dfa.long_text_search(sample);
+
         // 过滤空白和注释后的 token 列表
         let meaningful: Vec<_> = tokens
             .iter()
@@ -166,6 +175,9 @@ mod tests {
             .collect();
 
         assert!(!meaningful.is_empty(), "应该能扫描出 token");
+        assert!(meaningful
+            .iter()
+            .all(|t| t.lexeme_category != crate::lab1::LexemeCategory::NOTE));
 
         // 验证关键 token 存在
         let has_read = meaningful.iter().any(|t| t.identify.as_deref() == Some("read"));

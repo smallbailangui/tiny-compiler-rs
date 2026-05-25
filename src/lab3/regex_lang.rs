@@ -336,6 +336,7 @@ fn extract_char(ast: &RegexAST) -> Option<char> {
 fn extract_charset_id(ast: &RegexAST, _env: &HashMap<String, Graph>) -> Option<i32> {
     match ast {
         RegexAST::CharSet(id, _) => Some(*id),
+        RegexAST::Range(from_c, to_c) => Some(range(*from_c, *to_c)),
         RegexAST::Name(_name) => {
             // 名字引用时无法直接拿到 charset id，暂不支持
             // 会在 eval_ast_inner 中做处理
@@ -507,13 +508,14 @@ fn eval_ast_inner(ast: &RegexAST, env: &HashMap<String, Graph>) -> Graph {
             let l_id = extract_charset_id(l, env);
             let r_id = extract_charset_id(r, env);
             let r_char = extract_char(r);
+            let l_char = extract_char(l);
 
-            let result_id = match (l_id, r_id, r_char) {
-                (Some(lid), _, Some(c)) => {
+            let result_id = match (l_id, l_char, r_id, r_char) {
+                (Some(lid), _, _, Some(c)) => {
                     // 字符集 - 字符
                     difference_charset_char(lid, c)
                 }
-                (Some(lid), Some(rid), _) => {
+                (Some(lid), _, Some(rid), _) => {
                     // 字符集 - 字符集
                     difference_charsets(lid, rid)
                 }
