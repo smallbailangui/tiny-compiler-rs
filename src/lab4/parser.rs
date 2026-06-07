@@ -5,68 +5,111 @@
 //   第 1 遍：parser.rs — 语法分析 + 构造 AST（语法制导的语义动作）
 //   第 2 遍：codegen.rs — 遍历 AST 生成 TM 中间代码（语法制导翻译）
 //
-// ── 产生式与语义动作（SDD）────────────────────────────────
+// ── 产生式与语义动作（SDD / 属性文法）───────────────────
+//
+// 说明：下文对 TINY 语言的每一条上下文无关文法产生式，依次给出
+// （a）"产生式类型"的中文说明——这条规则在语言中扮演什么角色；
+// （b）"产生式含义"的中文说明——这条规则表达了什么样的语法结构；
+// （c）语法制导语义动作——.ast（构造 AST）与 .code（中间代码）。
 //
 // （1）program → stmt-seq
-//      语义动作：Program.stmts = stmt-seq.stmts
-//      中间代码：为每条语句生成 TM 指令，末尾追加 HALT
+//      类型：程序（起始产生式）
+//      含义：一个 TINY 程序由若干条语句按顺序组成。文法中唯一不以非终结符
+//            结尾的产生式，表示编译的入口点。
+//      program.ast = Program(stmt-seq.stmts)
+//      program.code = (∀ s ∈ stmt-seq.stmts) gen_stmt(s) || 'HALT'
 //
-// （2）stmt-seq → stmt { ; stmt }
-//      语义动作：收集所有 stmt 到 Vec<Stmt> 中
+// （2）stmt-seq → stmt₁ ; stmt₂ ; … ; stmtₙ
+//      类型：语句序列
+//      含义：用分号分隔的一条或多条语句的序列。用于表示 if 的 then/else 体、
+//            repeat 的循环体以及程序的顶层语句列表。
+//      stmt-seq.stmts = [stmt₁.ast, stmt₂.ast, …, stmtₙ.ast]
 //
 // （3）stmt → if-stmt | repeat-stmt | read-stmt | write-stmt | assign-stmt
-//      语义动作：根据前瞻 token 分发到对应子程序
+//      类型：语句（综合选择产生式）
+//      含义：TINY 语言的五种基本语句——条件分支、循环、读入、写出、赋值。
+//            语法分析器根据 lookahead token 选择对应子规则。
+//      stmt.ast = dispatch(lookahead)  // 递归下降分发
 //
-// （4）if-stmt → if expr then stmt-seq [ else stmt-seq ] end
-//      语义动作：Stmt::If { cond, then_part, else_part }
-//      中间代码：
-//        计算 cond → AC
-//        若 AC==0 则跳转到 else 或 end
-//        生成 then 代码
-//        若有 else：跳过 else，回填假跳转到 else，生成 else 代码
+// （4）if-stmt → if cond = expr then S₁ = stmt-seq [ else S₂ = stmt-seq ] end
+//      类型：if-then-else 条件语句
+//      含义：若条件表达式 cond 为真（非零），则执行 then 分支 S₁；
+//            若为假且存在 else 分支，则执行 S₂；以 end 关键字结束。
+//      if-stmt.ast = Node(If, cond.ast, S₁.stmts, S₂?.stmts)
+//      if-stmt.code =
+//          cond.code
+//          || JEQ AC, L_else_or_end   // false → 跳过 then
+//          || S₁.code
+//          || (S₂ ? LDA PC, L_end : ε)
+//          || (S₂ ? L_else: S₂.code : ε)
+//          || L_end:
 //
-// （5）repeat-stmt → repeat stmt-seq until expr
-//      语义动作：Stmt::Repeat { body, until }
-//      中间代码：
-//        记录循环起始地址
-//        生成 body 代码
-//        计算 until → AC
-//        若 AC==0（条件假），跳回循环起始地址
+// （5）repeat-stmt → repeat S = stmt-seq until cond = expr
+//      类型：repeat-until 循环语句
+//      含义：先执行循环体 S，然后计算条件 cond；若 cond 为假（零），
+//            则重复执行循环体；否则退出循环。相当于 do-while 的语义。
+//      repeat-stmt.ast = Node(Repeat, S.stmts, cond.ast)
+//      repeat-stmt.code =
+//          L_start: S.code || cond.code || JEQ AC, L_start
 //
 // （6）read-stmt → read id
-//      语义动作：Stmt::Read { name }
-//      中间代码：IN AC,0,0 ; ST AC,offset(GP)
+//      类型：read 读入语句
+//      含义：从标准输入读取一个整数值，存入变量 id 中。
+//      read-stmt.ast = Node(Read, id.name)
+//      read-stmt.code = IN AC,0,0 || ST AC, lookup(id.name)(GP)
 //
-// （7）write-stmt → write expr
-//      语义动作：Stmt::Write { expr }
-//      中间代码：计算 expr → AC ; OUT AC,0,0
+// （7）write-stmt → write E = expr
+//      类型：write 写出语句
+//      含义：计算表达式 E 的值，并将结果输出到标准输出。
+//      write-stmt.ast = Node(Write, E.ast)
+//      write-stmt.code = E.code || OUT AC,0,0
 //
-// （8）assign-stmt → id := expr
-//      语义动作：Stmt::Assign { name, expr }
-//      中间代码：计算 expr → AC ; ST AC,offset(GP)
+// （8）assign-stmt → id := E = expr
+//      类型：赋值语句
+//      含义：计算右部表达式 E 的值，并将结果存入变量 id。
+//      assign-stmt.ast = Node(Assign, id.name, E.ast)
+//      assign-stmt.code = E.code || ST AC, lookup(id.name)(GP)
 //
-// （9）expr → simple-expr [ relop simple-expr ]
-//      语义动作：若有 relop 则 Expr::Binary { op, left, right }
-//      中间代码：计算 left-right，JLT/JEQ 跳转设置 AC=0/1
+// （9）expr → E₁ = simple-expr [ relop E₂ = simple-expr ]
+//      类型：比较表达式
+//      含义：对两个简单表达式 E₁ 和 E₂ 做关系比较（< 或 =），
+//            结果为布尔值（1 = true, 0 = false）。若无比较运算符，
+//            则退化为简单表达式。
+//      expr.ast = (relop) ? Node(Binary, relop, E₁.ast, E₂.ast) : E₁.ast
+//      expr.code =
+//          (relop) ? E₁.code || push(AC) || E₂.code || AC₁←pop || SUB AC,AC₁,AC
+//                    || (JLT/JEQ) AC,2(PC) || LDC AC,0 || LDA PC,1(PC) || LDC AC,1
+//                  : E₁.code
 //
-// （10）simple-expr → term { addop term }
-//      语义动作：左结合 Expr::Binary，运算符 Plus/Minus
-//      中间代码：AC1=left, AC=right, ADD/SUB AC,AC1,AC
+// （10）simple-expr → T₁ = term { addop ∈ {+,-} T₂ = term }
+//       类型：简单表达式（加减表达式）
+//       含义：由一个或多个 term 通过加法运算符 + 或减法运算符 - 左结合
+//             连接而成。用于表达加减运算。
+//       simple-expr.ast = left-fold(Node(Binary, addop, acc.ast, T₂.ast), init=T₁)
+//       simple-expr.code =
+//           T₁.code || (∀ T₂: push(AC) || T₂.code || AC₁←pop || (ADD/SUB) AC,AC₁,AC)
 //
-// （11）term → factor { mulop factor }
-//      语义动作：左结合 Expr::Binary，运算符 Times/Over
-//      中间代码：AC1=left, AC=right, MUL/DIV AC,AC1,AC
+// （11）term → F₁ = factor { mulop ∈ {*,/} F₂ = factor }
+//       类型：项（乘除表达式）
+//       含义：由一个或多个 factor 通过乘法运算符 * 或除法运算符 / 左结合
+//             连接而成。用于表达乘除运算，优先级高于加减。
+//       term.ast = left-fold(Node(Binary, mulop, acc.ast, F₂.ast), init=F₁)
+//       term.code =
+//           F₁.code || (∀ F₂: push(AC) || F₂.code || AC₁←pop || (MUL/DIV) AC,AC₁,AC)
 //
-// （12）factor → num | id | ( expr )
-//      语义动作：Expr::Num(v) | Expr::Id(name) | 返回 expr
-//      中间代码：LDC AC,v,0 | LD AC,offset(GP)
+// （12）factor → ( expr ) | num | id
+//       类型：因子（基本表达式单位）
+//       含义：表达式的最小不可分割单元——可以是括号括起的子表达式、
+//             整数字面量 num、或变量引用 id。优先级最高。
+//       factor.ast = Node(Num, v) | Node(Id, name) | expr.ast
+//       factor.code = LDC AC,v,0 | LD AC, lookup(name)(GP) | expr.code
 //
-// ── 符号表管理 ──────────────────────────────────────────
+// ── 符号表（语义分析） ─────────────────────────────────
 //
-// 语义分析阶段（codegen.rs 第一遍遍历）：
-//   • 遇到 read id / assign id 时，若 id 未声明则自动分配全局偏移
-//   • TINY 语言无显式类型声明，所有变量默认为整型
-//   • 变量存储在 GP（全局指针）区域，偏移从 0 递增
+// 在第 2 遍遍历 AST（codegen.rs）时维护：
+//   symtab : HashMap<id.name, offset>
+//   lookup(id.name) ≡ if symtab.contains(id.name) then symtab[id.name]
+//                      else symtab.insert(id.name, next_global++)  // 首次遇到自动分配
 //
 // ============================================================
 

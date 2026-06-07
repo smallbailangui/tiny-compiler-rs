@@ -1,68 +1,118 @@
 #![allow(dead_code)]
 
 // ============================================================
-// SDT (Syntax-Directed Translation) — AST → TM 中间代码
+// SDT (Syntax-Directed Translation) — 第 2 遍: AST → TM 中间代码
 //
-// 本文件实现 SDT 的第 2 遍：遍历 AST 生成 TM 汇编指令。
-// 对应 parser.rs 头部所列的每条文法产生式的"中间代码"语义规则。
+// 本文件实现属性文法中 .code 属性的计算。
+// 对应 parser.rs 头部所列的每条文法产生式的中间代码语义规则。
 //
 // ── TM 虚拟机寄存器约定 ─────────────────────────────────
-//  AC(0)  = 累加器（通用计算结果）
-//  AC1(1) = 辅助累加器（二元运算的左操作数）
-//  GP(5)  = 全局指针（变量存储区基址）
-//  MP(6)  = 内存顶指针（临时变量栈基址）
+//  AC(0)  = 累加器
+//  AC1(1) = 辅助累加器
+//  GP(5)  = 全局指针（变量存储区基地址）
+//  MP(6)  = 内存顶指针（临时变量栈基地址）
 //  PC(7)  = 程序计数器
 //
-// ── AST 节点 → TM 指令映射 ──────────────────────────────
+// ── 属性计算（.code 综合属性）───────────────────────────
+//   每条文法产生式的 .code 属性由其子节点的 .code 拼接而成。
+//   约定以 || 表示代码段的顺序拼接（concatenation）。
 //
-//  Stmt::Read { name }:
-//    IN  AC,0,0          ; 读入整数到 AC
-//    ST  AC,offset(GP)   ; 存入变量 name
+// 说明：下文对每条文法产生式依次给出
+// （a）"类型"——该产生式在文法中的角色；
+// （b）"含义"——该产生式表达的 TINY 语言语法结构；
+// （c）.code 属性的计算公式——从子节点 .code 拼接为父节点 .code 的规则。
 //
-//  Stmt::Write { expr }:
-//    <计算 expr → AC>
-//    OUT AC,0,0          ; 输出 AC
+// （1）program → stmt-seq
+//      类型：程序（起始产生式）
+//      含义：整个 TINY 源程序的编译入口。将所有顶层语句的代码连接后，
+//            末尾追加 HALT 停机指令。
+//      program.code = (∀ s ∈ stmt-seq.stmts) s.code || 'HALT'
 //
-//  Stmt::Assign { name, expr }:
-//    <计算 expr → AC>
-//    ST  AC,offset(GP)   ; 存入变量 name
+// （2）stmt-seq → stmt₁ ; … ; stmtₙ
+//      类型：语句序列
+//      含义：用分号分隔的一条或多条语句的串联。用于表示 if 的 then/else 体、
+//            repeat 循环体以及程序的顶层语句列表。
+//      stmt-seq.code = stmt₁.code || stmt₂.code || … || stmtₙ.code
 //
-//  Stmt::If { cond, then, else? }:
-//    <计算 cond → AC>
-//    JEQ AC,else_label   ; 若 AC==0 跳到 else
-//    <生成 then 代码>
-//    LDA PC,end_label    ; 跳过 else
-//    else_label:
-//    <生成 else 代码>
-//    end_label:
+// （3）read-stmt → read id
+//      类型：read 读入语句
+//      含义：从标准输入读取一个整数，存入变量 id。对应的 TM 指令为 IN 读入
+//            到 AC，再 ST 存入 GP 偏移区。
+//      read-stmt.code = 'IN AC,0,0' || 'ST AC, lookup(id.name)(GP)'
 //
-//  Stmt::Repeat { body, until }:
-//    start:
-//    <生成 body 代码>
-//    <计算 until → AC>
-//    JEQ AC,start        ; 若 AC==0 跳回循环头
+// （4）write-stmt → write E = expr
+//      类型：write 写出语句
+//      含义：计算表达式 E 的值并输出到标准输出。先生成 E 的代码（结果在 AC），
+//            再发 OUT 指令。
+//      write-stmt.code = E.code || 'OUT AC,0,0'
 //
-//  Expr::Num(v):
-//    LDC AC,v,0          ; 加载立即数
+// （5）assign-stmt → id := E = expr
+//      类型：赋值语句
+//      含义：计算右部表达式 E 的值，存入变量 id。生成 E 的代码后发 ST 指令
+//            将 AC 写入 GP 偏移区。
+//      assign-stmt.code = E.code || 'ST AC, lookup(id.name)(GP)'
 //
-//  Expr::Id(name):
-//    LD  AC,offset(GP)   ; 加载变量
+// （6）if-stmt → if cond = expr then S₁ = stmt-seq [ else S₂ = stmt-seq ] end
+//      类型：if-then-else 条件语句
+//      含义：根据条件 cond 的真假选择执行 then 分支 S₁ 或 else 分支 S₂。
+//            实现方式为：计算 cond → AC；若 AC == 0 跳到 else 或 end；
+//            执行 then；若有 else，先跳过 else 再执行 else。
+//      if-stmt.code =
+//          cond.code
+//          || 'JEQ AC, L_else_or_end'   // false → 跳过 then
+//          || S₁.code
+//          || (S₂ ≠ ε ? 'LDA PC, L_end' : ε)
+//          || (S₂ ≠ ε ? L_else: S₂.code : ε)
+//          || L_end:
 //
-//  Expr::Binary { op, left, right }:
-//    <计算 left → AC>
-//    ST  AC,tmp(MP)      ; 左值压栈
-//    <计算 right → AC>
-//    LD  AC1,tmp(MP)     ; 弹出左值到 AC1
-//    ADD/SUB/MUL/DIV AC,AC1,AC   ; 二元运算
-//    关系运算: SUB AC,AC1,AC ; JLT/JEQ+0/1 序列
+// （7）repeat-stmt → repeat S = stmt-seq until cond = expr
+//      类型：repeat-until 循环语句
+//      含义：先执行循环体 S，再计算条件 cond；若 cond 为假（零）则重复。
+//            实现方式为：记录循环起始地址 L_start，生成 S 和 cond 的代码后，
+//            用 JEQ AC, L_start 回跳。
+//      repeat-stmt.code =
+//          L_start: || S.code || cond.code || 'JEQ AC, L_start'
 //
-// ── 符号表（语义分析）───────────────────────────────────
-//  symtab: HashMap<变量名, 全局偏移量>
-//  首次遇到变量自动分配，偏移从 0 递增，无重复声明检查
+// （8）Num(v)
+//      类型：整数字面量因子
+//      含义：加载立即数 v 到累加器 AC。对应 TM 的 LDC 指令。
+//      Num(v).code = 'LDC AC, v, 0'
+//
+// （9）Id(name)
+//      类型：变量引用因子
+//      含义：从变量 name 的存储位置加载值到累加器 AC。通过符号表查找偏移量，
+//            生成 LD AC, offset(GP) 指令。
+//      Id(name).code = 'LD AC, lookup(name)(GP)'
+//
+// （10）Binary { op, left, right }
+//       类型：二元运算表达式（算术/关系）
+//       含义：对左操作数 left 和右操作数 right 执行二元运算 op。
+//             算术运算（+、−、*、/）直接生成对应 TM 算术指令；
+//             关系运算（<、=）通过减法 + 条件跳转 + 0/1 赋值序列实现。
+//       Binary.code =
+//           left.code
+//           || 'ST AC, tmp(MP)'      // 左值压栈
+//           || right.code
+//           || 'LD AC1, tmp(MP)'     // 弹出左值到 AC1
+//           || op ∈ {+,−,*,/} ? op_inst(AC, AC1, AC)
+//           || op ∈ {<,=}   ? relop_code(op)
+//
+//       relop_code(op) =
+//           'SUB AC, AC1, AC'        // left − right
+//           || '(JLT/JEQ) AC, 2(PC)' // 满足 → 跳到加载 1
+//           || 'LDC AC, 0, 0'        // 不满足 → false (0)
+//           || 'LDA PC, 1(PC)'       // 跳过加载 1
+//           || 'LDC AC, 1, 0'        // 满足 → true (1)
+//
+// ── 符号表 lookup ──────────────────────────────────────
+//   symtab : HashMap<id.name, offset>
+//   lookup(id.name) ≡ if id.name ∈ symtab
+//                       then symtab[id.name]
+//                       else symtab.insert(id.name, next_global++)
 //
 // ── 回填（Backpatching）机制 ────────────────────────────
-//  if/repeat 的目标地址在生成时未知，通过 emit_skip 预留槽位、
-//  emit_backup/emit_restore 回填解决。
+//  指令地址在向前生成时未知 → emit_skip 预留槽位 →
+//  emit_backup / emit_restore 回填。
 //
 // ============================================================
 
