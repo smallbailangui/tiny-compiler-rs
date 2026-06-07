@@ -43,13 +43,18 @@ pub fn compile_file(input: &Path, output: &Path) -> Result<(), CompileError> {
 pub fn run_lab4_test() -> Result<(), CompileError> {
     println!("实验 4：TINY 语言编译器\n");
 
-    let samples = [
+    // 正确样例
+    let ok_samples = [
         ("sample.tny", "sample.tm", "阶乘计算"),
-        ("sample2.tny", "sample2.tm", "两数相加"),
         ("sample3.tny", "sample3.tm", "if-else 算术"),
     ];
 
-    for (input_name, output_name, desc) in &samples {
+    // 预期失败的语法错误样例
+    let err_samples = [
+        ("sample2.tny", "缺少分号 - 语法错误"),
+    ];
+
+    for (input_name, output_name, desc) in &ok_samples {
         let input = Path::new("src/lab4").join(input_name);
         let output = Path::new("src/lab4").join(output_name);
 
@@ -72,6 +77,27 @@ pub fn run_lab4_test() -> Result<(), CompileError> {
         println!();
     }
 
-    println!("========== 全部 3 个样例编译成功 ==========");
+    // 预期报错的样例
+    for (input_name, desc) in &err_samples {
+        let input = Path::new("src/lab4").join(input_name);
+        println!("--- {desc} ({input_name}) ---");
+        println!("  输入文件: {}", input.display());
+        let source = std::fs::read_to_string(&input)
+            .map_err(|e| CompileError::Io(format!("读取失败 {}: {e}", input.display())))?;
+        match compile_str(&source) {
+            Ok(_) => {
+                return Err(CompileError::Codegen(format!(
+                    "预期 {input_name} 编译失败，但它成功了"
+                )));
+            }
+            Err(e) => {
+                println!("  预期错误，编译失败（符合预期）");
+                println!("  错误信息: {e}");
+            }
+        }
+        println!();
+    }
+
+    println!("========== 全部 3 个样例测试通过 ==========");
     Ok(())
 }

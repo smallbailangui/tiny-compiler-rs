@@ -1,5 +1,71 @@
 #![allow(dead_code)]
 
+// ============================================================
+// SDT (Syntax-Directed Translation) — AST → TM 中间代码
+//
+// 本文件实现 SDT 的第 2 遍：遍历 AST 生成 TM 汇编指令。
+// 对应 parser.rs 头部所列的每条文法产生式的"中间代码"语义规则。
+//
+// ── TM 虚拟机寄存器约定 ─────────────────────────────────
+//  AC(0)  = 累加器（通用计算结果）
+//  AC1(1) = 辅助累加器（二元运算的左操作数）
+//  GP(5)  = 全局指针（变量存储区基址）
+//  MP(6)  = 内存顶指针（临时变量栈基址）
+//  PC(7)  = 程序计数器
+//
+// ── AST 节点 → TM 指令映射 ──────────────────────────────
+//
+//  Stmt::Read { name }:
+//    IN  AC,0,0          ; 读入整数到 AC
+//    ST  AC,offset(GP)   ; 存入变量 name
+//
+//  Stmt::Write { expr }:
+//    <计算 expr → AC>
+//    OUT AC,0,0          ; 输出 AC
+//
+//  Stmt::Assign { name, expr }:
+//    <计算 expr → AC>
+//    ST  AC,offset(GP)   ; 存入变量 name
+//
+//  Stmt::If { cond, then, else? }:
+//    <计算 cond → AC>
+//    JEQ AC,else_label   ; 若 AC==0 跳到 else
+//    <生成 then 代码>
+//    LDA PC,end_label    ; 跳过 else
+//    else_label:
+//    <生成 else 代码>
+//    end_label:
+//
+//  Stmt::Repeat { body, until }:
+//    start:
+//    <生成 body 代码>
+//    <计算 until → AC>
+//    JEQ AC,start        ; 若 AC==0 跳回循环头
+//
+//  Expr::Num(v):
+//    LDC AC,v,0          ; 加载立即数
+//
+//  Expr::Id(name):
+//    LD  AC,offset(GP)   ; 加载变量
+//
+//  Expr::Binary { op, left, right }:
+//    <计算 left → AC>
+//    ST  AC,tmp(MP)      ; 左值压栈
+//    <计算 right → AC>
+//    LD  AC1,tmp(MP)     ; 弹出左值到 AC1
+//    ADD/SUB/MUL/DIV AC,AC1,AC   ; 二元运算
+//    关系运算: SUB AC,AC1,AC ; JLT/JEQ+0/1 序列
+//
+// ── 符号表（语义分析）───────────────────────────────────
+//  symtab: HashMap<变量名, 全局偏移量>
+//  首次遇到变量自动分配，偏移从 0 递增，无重复声明检查
+//
+// ── 回填（Backpatching）机制 ────────────────────────────
+//  if/repeat 的目标地址在生成时未知，通过 emit_skip 预留槽位、
+//  emit_backup/emit_restore 回填解决。
+//
+// ============================================================
+
 use std::collections::HashMap;
 
 use super::ast::{BinOp, Expr, Program, Stmt};

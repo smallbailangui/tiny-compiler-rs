@@ -1,3 +1,75 @@
+// ============================================================
+// SDT (Syntax-Directed Translation) — TINY 语言的语义分析与中间代码生成
+//
+// 本实验采用两遍策略：
+//   第 1 遍：parser.rs — 语法分析 + 构造 AST（语法制导的语义动作）
+//   第 2 遍：codegen.rs — 遍历 AST 生成 TM 中间代码（语法制导翻译）
+//
+// ── 产生式与语义动作（SDD）────────────────────────────────
+//
+// （1）program → stmt-seq
+//      语义动作：Program.stmts = stmt-seq.stmts
+//      中间代码：为每条语句生成 TM 指令，末尾追加 HALT
+//
+// （2）stmt-seq → stmt { ; stmt }
+//      语义动作：收集所有 stmt 到 Vec<Stmt> 中
+//
+// （3）stmt → if-stmt | repeat-stmt | read-stmt | write-stmt | assign-stmt
+//      语义动作：根据前瞻 token 分发到对应子程序
+//
+// （4）if-stmt → if expr then stmt-seq [ else stmt-seq ] end
+//      语义动作：Stmt::If { cond, then_part, else_part }
+//      中间代码：
+//        计算 cond → AC
+//        若 AC==0 则跳转到 else 或 end
+//        生成 then 代码
+//        若有 else：跳过 else，回填假跳转到 else，生成 else 代码
+//
+// （5）repeat-stmt → repeat stmt-seq until expr
+//      语义动作：Stmt::Repeat { body, until }
+//      中间代码：
+//        记录循环起始地址
+//        生成 body 代码
+//        计算 until → AC
+//        若 AC==0（条件假），跳回循环起始地址
+//
+// （6）read-stmt → read id
+//      语义动作：Stmt::Read { name }
+//      中间代码：IN AC,0,0 ; ST AC,offset(GP)
+//
+// （7）write-stmt → write expr
+//      语义动作：Stmt::Write { expr }
+//      中间代码：计算 expr → AC ; OUT AC,0,0
+//
+// （8）assign-stmt → id := expr
+//      语义动作：Stmt::Assign { name, expr }
+//      中间代码：计算 expr → AC ; ST AC,offset(GP)
+//
+// （9）expr → simple-expr [ relop simple-expr ]
+//      语义动作：若有 relop 则 Expr::Binary { op, left, right }
+//      中间代码：计算 left-right，JLT/JEQ 跳转设置 AC=0/1
+//
+// （10）simple-expr → term { addop term }
+//      语义动作：左结合 Expr::Binary，运算符 Plus/Minus
+//      中间代码：AC1=left, AC=right, ADD/SUB AC,AC1,AC
+//
+// （11）term → factor { mulop factor }
+//      语义动作：左结合 Expr::Binary，运算符 Times/Over
+//      中间代码：AC1=left, AC=right, MUL/DIV AC,AC1,AC
+//
+// （12）factor → num | id | ( expr )
+//      语义动作：Expr::Num(v) | Expr::Id(name) | 返回 expr
+//      中间代码：LDC AC,v,0 | LD AC,offset(GP)
+//
+// ── 符号表管理 ──────────────────────────────────────────
+//
+// 语义分析阶段（codegen.rs 第一遍遍历）：
+//   • 遇到 read id / assign id 时，若 id 未声明则自动分配全局偏移
+//   • TINY 语言无显式类型声明，所有变量默认为整型
+//   • 变量存储在 GP（全局指针）区域，偏移从 0 递增
+//
+// ============================================================
+
 #![allow(dead_code)]
 
 use super::ast::{BinOp, Expr, Program, Stmt};
@@ -5,6 +77,7 @@ use super::error::CompileError;
 use super::scanner::{TinyToken, TinyTokenKind};
 
 /// 对 token 序列做语法分析，返回 AST。
+/// 这是 SDT 的第 1 遍：语法制导构造抽象语法树。
 pub fn parse(tokens: &[TinyToken]) -> Result<Program, CompileError> {
     let mut p = Parser::new(tokens);
     let stmts = p.parse_stmt_seq()?;

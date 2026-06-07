@@ -1,5 +1,5 @@
-{ Sample program 2 - computes sum of two numbers }
-read a;
-read b;
-sum := a + b;
+{ Sample program 2 - SYNTAX ERROR: missing semicolons }
+read a
+read b
+sum := a + b
 write sum
