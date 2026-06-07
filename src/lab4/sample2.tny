@@ -1,0 +1,5 @@
+{ Sample program 2 - computes sum of two numbers }
+read a;
+read b;
+sum := a + b;
+write sum

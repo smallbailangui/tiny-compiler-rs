@@ -11,6 +11,18 @@ path = "src/main.rs"
 name = "lab2"
 path = "src/lab2/lab2.rs"
 
+[[bin]]
+name = "lab1"
+path = "src/bin/lab1.rs"
+
+[[bin]]
+name = "lab3"
+path = "src/bin/lab3.rs"
+
+[[bin]]
+name = "lab4"
+path = "src/bin/lab4.rs"
+
 [dependencies]
 once_cell = "1.19"
 thiserror = "1.0"

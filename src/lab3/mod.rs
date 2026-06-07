@@ -140,6 +140,7 @@ mod tests {
 
     #[test]
     fn test_lab3_sample_tiny_scan() {
+        let _guard = crate::lab4::global_test_lock();
         reset_global_tables();
         let dfa = build_tiny_lexer_dfa();
 
